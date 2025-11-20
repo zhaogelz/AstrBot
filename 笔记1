@@ -1,0 +1,41 @@
+创建网盘空间：
+
+1、获取access_token  （可能两小时更新一次）
+curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&corpsecret=uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"
+
+
+2、参考：https://developer.work.weixin.qq.com/document/path/93655
+
+注意：修改下面的access_token为上一步获取到的access_token，将执行命令设备添加到应用可信ip
+
+请求方式：POST（HTTPS）
+
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_create?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+{
+    "space_name": "Automatic upload",
+    "auth_info": [ {
+        "type": 2,
+        "departmentid": 1,
+        "auth": 1
+    }],
+    "space_sub_type": 0
+}
+
+3、输出：{
+    "spaceid": "s.wwa9748681bdece041.763567975WNL",
+    "errcode": 0,
+    "errmsg": "ok"
+}
+
+4、添加成员并设置管理员权限
+请求方式：POST（HTTPS）
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_acl_add?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+请求包体
+{
+    "spaceid": "s.wwa9748681bdece041.763567975WNL",
+    "auth_info": [{
+        "type": 1,
+        "userid": "LiZhen",
+        "auth": 7
+    }]
+}
