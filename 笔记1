@@ -39,3 +39,14 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
         "auth": 7
     }]
 }
+
+该接口用于获取空间的成员列表、信息、权限等信息。
+
+请求方式：POST（HTTPS）
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_info?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+
+请求包体
+
+{
+    "spaceid": "SPACEID"
+}
