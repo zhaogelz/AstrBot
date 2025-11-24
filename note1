@@ -10,7 +10,7 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
 
 请求方式：POST（HTTPS）
 
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_create?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_create?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
 {
     "space_name": "Automatic upload",
     "auth_info": [ {
@@ -29,7 +29,7 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
 
 4、添加成员并设置管理员权限
 请求方式：POST（HTTPS）
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_acl_add?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_acl_add?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
 请求包体
 {
     "spaceid": "s.wwa9748681bdece041.763567975WNL",
@@ -39,11 +39,11 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
         "auth": 7
     }]
 }
-
+userid 登陆企微，组织架构，账号=userid
 该接口用于获取空间的成员列表、信息、权限等信息。
 
 请求方式：POST（HTTPS）
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_info?access_token=w7tnzy_bchz31NtEg-NVx0It7F0k_xGDLIuKNSYif3j-uf9rfrFEfTRMXytrMoRpt-N20Z6ACkstNwVD6Qtcn-Oryyw0hcwfE3FqtQei7EszfipSDubPHwsR9rdBUxMSSZNpDjPGAjnfpRh6vZIgzLpVpxhvadiKD9152B6vDoZIMshfNet4Kolvb2TMcU5VXlGT5Zyz9G5vthk9A0ag4g
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_info?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
 
 请求包体
 
