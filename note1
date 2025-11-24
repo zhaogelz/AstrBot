@@ -50,3 +50,22 @@ userid 登陆企微，组织架构，账号=userid
 {
     "spaceid": "SPACEID"
 }
+
+5、尝试创建群聊：
+
+请求方式：POST（HTTPS）
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/appchat/create?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
+请求包体
+{
+    "name": "双子星群聊",
+    "owner": "LiZhen",
+    "userlist": ["LiZhen", "WuLongChaCha"],
+    "chatid": "3CbI2mU4dwPhnZ6OgyQrf9NqFStsTeRc"
+}
+
+输出：
+{
+    "errcode": 0,
+    "errmsg": "ok",
+    "chatid": "3CbI2mU4dwPhnZ6OgyQrf9NqFStsTeRc"
+}
