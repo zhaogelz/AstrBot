@@ -1,4 +1,4 @@
-创建网盘空间：
+企微  微盘：API处需添加应用，应用：需添加可信IP
 
 1、获取access_token  （可能两小时更新一次）
 curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&corpsecret=uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"
@@ -10,7 +10,7 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
 
 请求方式：POST（HTTPS）
 
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_create?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_create?access_token=VGzebE66rOz0qp5T_NwTizJDt1jBEVujzbZqWfNoekBmqY2Ko-Jz-TnRHkPgCLSqs4mM-oUSgkts7L13xPi3LViBSnzGFJ0WfyP_07QPeY-C_tufpvQoHyYN8KK8IVldq2mf00wQmZqgIumMgichoaNhP8tdukjR8xaxjTTcD_uoaAY6EjNLgxV0RGAYpo9A5o2mKh1Zbl3sWDkyqUCmFQ
 {
     "space_name": "Automatic upload",
     "auth_info": [ {
@@ -29,7 +29,7 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
 
 4、添加成员并设置管理员权限
 请求方式：POST（HTTPS）
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_acl_add?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_acl_add?access_token=VGzebE66rOz0qp5T_NwTizJDt1jBEVujzbZqWfNoekBmqY2Ko-Jz-TnRHkPgCLSqs4mM-oUSgkts7L13xPi3LViBSnzGFJ0WfyP_07QPeY-C_tufpvQoHyYN8KK8IVldq2mf00wQmZqgIumMgichoaNhP8tdukjR8xaxjTTcD_uoaAY6EjNLgxV0RGAYpo9A5o2mKh1Zbl3sWDkyqUCmFQ
 请求包体
 {
     "spaceid": "s.wwa9748681bdece041.763567975WNL",
@@ -40,21 +40,22 @@ curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&cor
     }]
 }
 userid 登陆企微，组织架构，账号=userid
+
 该接口用于获取空间的成员列表、信息、权限等信息。
 
 请求方式：POST（HTTPS）
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_info?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/wedrive/space_info?access_token=VGzebE66rOz0qp5T_NwTizJDt1jBEVujzbZqWfNoekBmqY2Ko-Jz-TnRHkPgCLSqs4mM-oUSgkts7L13xPi3LViBSnzGFJ0WfyP_07QPeY-C_tufpvQoHyYN8KK8IVldq2mf00wQmZqgIumMgichoaNhP8tdukjR8xaxjTTcD_uoaAY6EjNLgxV0RGAYpo9A5o2mKh1Zbl3sWDkyqUCmFQ
 
 请求包体
 
 {
-    "spaceid": "SPACEID"
+    "spaceid": "s.wwa9748681bdece041.763567975WNL"
 }
 
 5、尝试创建群聊：
 
 请求方式：POST（HTTPS）
-请求地址: https://qyapi.weixin.qq.com/cgi-bin/appchat/create?access_token=7WEoKcagns2SHuXUWKX4uxIYkS8jmEHZM12MEr3Am3443UQV0Z9VOmjGJ9RzewMj1q1w3lNS2APEnx8i8G_ppLKZzhvYKSzOB4v7QejNykvBgHn9TN9Q0dECmvMpwpDg62tpdoNQ71gDCvZoZ8j13wYfyqBX12O1ZRSDLmuAyKIf419Rihfp1Jr_ENkJqFlA0q19HYAtlgQlqhzZV3Yicw
+请求地址: https://qyapi.weixin.qq.com/cgi-bin/appchat/create?access_token=VGzebE66rOz0qp5T_NwTizJDt1jBEVujzbZqWfNoekBmqY2Ko-Jz-TnRHkPgCLSqs4mM-oUSgkts7L13xPi3LViBSnzGFJ0WfyP_07QPeY-C_tufpvQoHyYN8KK8IVldq2mf00wQmZqgIumMgichoaNhP8tdukjR8xaxjTTcD_uoaAY6EjNLgxV0RGAYpo9A5o2mKh1Zbl3sWDkyqUCmFQ
 请求包体
 {
     "name": "双子星群聊",
@@ -68,4 +69,13 @@ userid 登陆企微，组织架构，账号=userid
     "errcode": 0,
     "errmsg": "ok",
     "chatid": "3CbI2mU4dwPhnZ6OgyQrf9NqFStsTeRc"
+}
+
+https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload?access_token=VGzebE66rOz0qp5T_NwTizJDt1jBEVujzbZqWfNoekBmqY2Ko-Jz-TnRHkPgCLSqs4mM-oUSgkts7L13xPi3LViBSnzGFJ0WfyP_07QPeY-C_tufpvQoHyYN8KK8IVldq2mf00wQmZqgIumMgichoaNhP8tdukjR8xaxjTTcD_uoaAY6EjNLgxV0RGAYpo9A5o2mKh1Zbl3sWDkyqUCmFQ
+
+{
+  "spaceid": "s.wwa9748681bdece041.763567975WNL",
+  "fatherid": "s.wwa9748681bdece041.763567975WNL",
+  "file_name": "test.txt",
+  "size": 39,
 }
