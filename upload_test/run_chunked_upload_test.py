@@ -14,10 +14,10 @@ SECRET = "uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"
 WEPAN_SPACE_ID = "s.wwa9748681bdece041.763567975WNL"
 
 # 文件路径
-FILE_TO_UPLOAD = "2.docx"
+FILE_TO_UPLOAD = "4.docx"
 
 # Access Token (如有需要请填入，否则设为 None)
-HARDCODED_ACCESS_TOKEN = "jlEY2fX7ewg8aAuv5-W-PC_4wiDAcxI6ulnAg01-hqIHWbcqhc-KVhMouJ4Cr8iFJGmyC76OtFDkYC3OpWNsvsCHwrccXuHJiMIzh6813WkSSLrKu8XEk4AoJaZxsacz0cooEIrgdiOat-DQQVLGRMWqCqXxanqUv0atsdYmaacDPyoQkl7csH7XRrmK4vpRDUbfuIcFDi3u5_943mAtHw"
+HARDCODED_ACCESS_TOKEN = "Onzc41drQGwSNZuzjbV3uaNQJOUbjnoqSdtdH4CF0fEWvwy045TwbYpot6lWf9n1_DzcB1hDsOqWfHCUa7-DgbI63MHy81OPtwgnsFlWaUTu-Qyzn4y1ZsOopifa28naOyi-qGxbjCN3ABy5Q9pfHcCD8gONDi_QHmjw-MXO3Ab8VKKtCW2UI-Y97m3SNGQTqGVoK8VbjNACPbOED0SU3g"
 
 # 固定分块大小 2MB
 CHUNK_SIZE = 2 * 1024 * 1024 
@@ -112,11 +112,17 @@ class SafeSHA1:
         return '{:08x}{:08x}{:08x}{:08x}{:08x}'.format(*temp_runner._h)
 
 
+# 动态添加模块搜索路径，确保能导入同级目录的 token_manager
+current_dir = os.path.dirname(os.path.abspath(__file__))
+if current_dir not in sys.path:
+    sys.path.append(current_dir)
+
+from token_manager import TokenManager
+
 async def _get_access_token(corpid, secret):
-    if HARDCODED_ACCESS_TOKEN:
-        return HARDCODED_ACCESS_TOKEN
-    # 这里省略自动获取逻辑
-    return None
+    # 此函数已废弃，保留是为了兼容性或作为参考，实际使用 TokenManager
+    pass
+
 
 def calculate_block_shas(file_path):
     """
@@ -163,12 +169,10 @@ def calculate_block_shas(file_path):
     print(f"\n✅ 计算完成")
     return block_shas, file_size
 
-async def upload_part_task(session, access_token, upload_key, index, chunk_data, sem):
+async def upload_part_task(session, token_mgr, upload_key, index, chunk_data, sem):
     """
     单个分块上传任务，受信号量 sem 控制并发数
     """
-    url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_part?access_token={access_token}"
-    
     # 转换为 Base64 (注意：这会增加内存消耗，并发数不宜过大)
     b64_content = base64.b64encode(chunk_data).decode('utf-8')
     payload = {
@@ -178,7 +182,14 @@ async def upload_part_task(session, access_token, upload_key, index, chunk_data,
     }
     
     async with sem: # 获取并发锁
-        for retry in range(3):
+        for retry in range(5): # 增加重试次数以适应Token刷新
+            access_token = await token_mgr.get_token()
+            if not access_token:
+                print(f"   ❌ 分块 {index} 失败: 无法获取Token")
+                return False
+
+            url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_part?access_token={access_token}"
+            
             try:
                 # 使用 post，并在出错时打印
                 async with session.post(url, json=payload, timeout=120) as response:
@@ -186,6 +197,11 @@ async def upload_part_task(session, access_token, upload_key, index, chunk_data,
                     if res_data.get("errcode") == 0:
                         print(f"   ⬆️ 分块 {index} 上传成功")
                         return True
+                    elif res_data.get("errcode") in [40014, 42001, 41001]:
+                        print(f"   ⚠️ 分块 {index} Token失效 ({res_data.get('errcode')})，正在刷新并重试...")
+                        await token_mgr.get_token(force_refresh=True)
+                        await asyncio.sleep(1) # 稍等
+                        continue
                     else:
                         print(f"   ⚠️ 分块 {index} 失败 (Retrying): {res_data}")
             except Exception as e:
@@ -196,42 +212,51 @@ async def upload_part_task(session, access_token, upload_key, index, chunk_data,
         return False
 
 async def main():
-    # 1. 准备 Token
-    access_token = await _get_access_token(CORPID, SECRET)
-    if not access_token: 
-        print("❌ 无法获取 Access Token")
-        return
-
+    # 1. 准备 Token Manager
+    token_mgr = TokenManager(CORPID, SECRET, HARDCODED_ACCESS_TOKEN)
+    
     # 2. 计算 SHA (在单独线程中运行，不阻塞事件循环)
     block_shas, file_size = await asyncio.to_thread(calculate_block_shas, FILE_TO_UPLOAD)
     if not block_shas: return
 
     async with aiohttp.ClientSession() as session:
-        # 3. 初始化上传
+        # 3. 初始化上传 (带Token重试逻辑)
         print(f"\n📡 [1/3] 初始化上传...")
-        init_url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_init?access_token={access_token}"
-        init_payload = {
-            "spaceid": WEPAN_SPACE_ID,
-            "fatherid": WEPAN_SPACE_ID,
-            "file_name": os.path.basename(FILE_TO_UPLOAD),
-            "size": file_size,
-            "block_sha": block_shas,
-            "skip_push_card": False
-        }
+        upload_key = None
         
-        async with session.post(init_url, json=init_payload) as resp:
-            init_res = await resp.json()
-        
-        if init_res.get("errcode") != 0:
-            print(f"❌ 初始化失败: {init_res}")
-            return
-        
-        if init_res.get("hit_exist"):
-            print(f"🎉 秒传成功! FileID: {init_res.get('fileid')}")
-            return
+        for retry in range(2):
+            access_token = await token_mgr.get_token()
+            if not access_token: return
 
-        upload_key = init_res["upload_key"]
-        print(f"✅ 初始化成功, Key: {upload_key[:10]}...")
+            init_url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_init?access_token={access_token}"
+            init_payload = {
+                "spaceid": WEPAN_SPACE_ID,
+                "fatherid": WEPAN_SPACE_ID,
+                "file_name": os.path.basename(FILE_TO_UPLOAD),
+                "size": file_size,
+                "block_sha": block_shas,
+                "skip_push_card": False
+            }
+            
+            async with session.post(init_url, json=init_payload) as resp:
+                init_res = await resp.json()
+            
+            if init_res.get("errcode") == 0:
+                if init_res.get("hit_exist"):
+                    print(f"🎉 秒传成功! FileID: {init_res.get('fileid')}")
+                    return
+                upload_key = init_res["upload_key"]
+                print(f"✅ 初始化成功, Key: {upload_key[:10]}...")
+                break
+            elif init_res.get("errcode") in [40014, 42001, 41001]:
+                 print(f"⚠️ 初始化遇到Token失效，刷新重试...")
+                 await token_mgr.get_token(force_refresh=True)
+                 continue
+            else:
+                print(f"❌ 初始化失败: {init_res}")
+                return
+        
+        if not upload_key: return
 
         # 4. 并发上传分块
         print(f"\n📡 [2/3] 正在并发上传 (并发数: {MAX_CONCURRENT_UPLOADS})...")
@@ -246,18 +271,15 @@ async def main():
                 chunk_data = f.read(CHUNK_SIZE)
                 if not chunk_data: break
                 
-                # 创建上传任务
+                # 创建上传任务 (传入 token_mgr)
                 task = asyncio.create_task(
-                    upload_part_task(session, access_token, upload_key, index, chunk_data, sem)
+                    upload_part_task(session, token_mgr, upload_key, index, chunk_data, sem)
                 )
                 pending_tasks.add(task)
                 
                 # 内存保护机制：
-                # 如果积压的任务超过并发数，等待其中一个完成再继续读取文件
-                # 这样可以防止读取整个大文件到内存中
                 if len(pending_tasks) >= MAX_CONCURRENT_UPLOADS:
                     done, pending_tasks = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
-                    # 检查已完成的任务是否有失败的 (这里简单处理，实际生产中可能需要终止)
                     for d in done:
                         if not d.result():
                             print("❌ 检测到分块上传失败，停止上传")
@@ -269,15 +291,23 @@ async def main():
         if pending_tasks:
             await asyncio.wait(pending_tasks)
 
-        # 5. 完成合并
+        # 5. 完成合并 (带Token重试逻辑)
         print(f"\n📡 [3/3] 合并文件...")
-        finish_url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_finish?access_token={access_token}"
-        async with session.post(finish_url, json={"upload_key": upload_key}) as resp:
-            finish_res = await resp.json()
-            if finish_res.get("errcode") == 0:
-                print(f"✨ 上传完毕! FileID: {finish_res.get('fileid')}")
-            else:
-                print(f"❌ 合并失败: {finish_res}")
+        for retry in range(2):
+            access_token = await token_mgr.get_token()
+            finish_url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_upload_finish?access_token={access_token}"
+            async with session.post(finish_url, json={"upload_key": upload_key}) as resp:
+                finish_res = await resp.json()
+                if finish_res.get("errcode") == 0:
+                    print(f"✨ 上传完毕! FileID: {finish_res.get('fileid')}")
+                    break
+                elif finish_res.get("errcode") in [40014, 42001, 41001]:
+                    print(f"⚠️ 合并时Token失效，刷新重试...")
+                    await token_mgr.get_token(force_refresh=True)
+                    continue
+                else:
+                    print(f"❌ 合并失败: {finish_res}")
+                    break
 
 if __name__ == "__main__":
     # Windows下aiohttp需要的策略设置
