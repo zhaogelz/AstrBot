@@ -277,3 +277,47 @@ class WeDriveUploader:
                         logger.error(f"❌ 合并失败: {finish_res}")
                         return None
         return None
+
+    async def list_files(self, fatherid=None):
+        """
+        列出微盘文件
+        """
+        if not fatherid:
+            fatherid = self.space_id
+
+        logger.info(f"📂 正在获取微盘文件列表 (SpaceID: {self.space_id})...")
+        
+        async with aiohttp.ClientSession() as session:
+            for retry in range(2):
+                access_token = await self.token_mgr.get_token()
+                if not access_token: return None
+
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_list?access_token={access_token}"
+                payload = {
+                    "spaceid": self.space_id,
+                    "fatherid": fatherid,
+                    "sort_type": 3, # 1: name, 2: size, 3: update time
+                    "start": 0,
+                    "limit": 100
+                }
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        res_data = await resp.json()
+                        if res_data.get("errcode") == 0:
+                            # API returns {'errcode': 0, 'file_list': {'item': [...]}}
+                            # Wait, the log shows: {'item': [...]} inside `file_list` key of `res_data`?
+                            # The previous log showed: "✅ 获取成功, file_list: {'item': [...]}"
+                            # So res_data['file_list'] IS the dict {'item': [...]}.
+                            return res_data.get("file_list", {})
+                        elif res_data.get("errcode") in [40014, 42001, 41001]:
+                            logger.warning(f"⚠️ 获取列表时Token失效，刷新重试...")
+                            await self.token_mgr.get_token(force_refresh=True)
+                            continue
+                        else:
+                            logger.error(f"❌ 获取列表失败: {res_data}")
+                            return None
+                except Exception as e:
+                    logger.error(f"❌ 获取列表网络异常: {e}")
+                    return None
+        return None

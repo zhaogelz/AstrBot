@@ -1,4 +1,7 @@
 企微  微盘：API处需添加应用，应用：需添加可信IP
+查看微盘：列出微盘中所有的文件
+
+
 
 1、获取access_token  （可能两小时更新一次）
 curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&corpsecret=uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"

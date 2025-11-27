@@ -77,6 +77,47 @@ class WeDriveUploaderPlugin(Star):
         if not self.uploader:
             return
 
+        # 1. 处理 "查看微盘" 指令
+        message_str = event.message_str.strip()
+        if message_str == "查看微盘":
+            logger.info(f"[WeDriveUploader] 收到查看微盘指令")
+            yield event.plain_result(f"📂 正在获取微盘文件列表...")
+            
+            files = await self.uploader.list_files()
+            if files is None:
+                 yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
+            else:
+                # Extract list from response structure {'item': [...]}
+                file_list = files.get('item', []) if isinstance(files, dict) else files
+                if not isinstance(file_list, list):
+                    file_list = []
+
+                if not file_list:
+                     yield event.plain_result(f"📂 微盘目录为空。")
+                else:
+                    # 格式化输出
+                    msg = f"📂 微盘文件列表 (共{len(file_list)}个):\n"
+                    for f in file_list:
+                        if isinstance(f, str):
+                             name = f"FileID: {f}"
+                             size_str = "未知大小"
+                        else:
+                            name = f.get("file_name", "未知文件")
+                            size = int(f.get("file_size", 0))
+                            # 简单的大小转换
+                            if size < 1024:
+                                size_str = f"{size}B"
+                            elif size < 1024 * 1024:
+                                size_str = f"{size/1024:.1f}KB"
+                            else:
+                                size_str = f"{size/1024/1024:.1f}MB"
+                        msg += f"- {name} ({size_str})\n"
+                    yield event.plain_result(msg)
+            
+            # 停止事件传播，防止 AI 回复
+            event.stop_event()
+            return
+
         message_chain = event.message_obj.message
         
         # 调试日志：打印收到的消息组件类型
