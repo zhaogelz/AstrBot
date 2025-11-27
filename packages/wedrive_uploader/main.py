@@ -5,6 +5,8 @@ import logging
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Star, Context
 from astrbot.api.message_components import File, Image, Video
+from astrbot.core import file_token_service, astrbot_config
+from astrbot.core.utils.io import get_local_ip_addresses
 from .token_manager import TokenManager
 from .uploader import WeDriveUploader
 
@@ -155,6 +157,117 @@ class WeDriveUploaderPlugin(Star):
                             size_str = f"{size/1024/1024:.1f}MB"
                         msg += f"- {name} ({size_str})\n"
                     yield event.plain_result(msg)
+            
+            event.stop_event()
+            return
+
+        # 3. 处理 "删微盘" 指令
+        if message_str.startswith("删微盘"):
+            filename = message_str[3:].strip()
+            if not filename:
+                yield event.plain_result("⚠️ 请输入要删除的准确文件名，例如：删微盘 test.txt")
+                event.stop_event()
+                return
+
+            logger.info(f"[WeDriveUploader] 尝试删除文件: {filename}")
+            yield event.plain_result(f"🗑️ 正在查找并删除 '{filename}' ...")
+
+            files = await self.uploader.list_files()
+            if files is None:
+                 yield event.plain_result(f"❌ 获取文件列表失败，无法删除。")
+            else:
+                # Extract list
+                file_list = files.get('item', []) if isinstance(files, dict) else files
+                if not isinstance(file_list, list):
+                    file_list = []
+                
+                # Find exact match
+                target_file = None
+                for f in file_list:
+                    if isinstance(f, dict) and f.get("file_name") == filename:
+                        target_file = f
+                        break
+                
+                if not target_file:
+                     yield event.plain_result(f"❌ 未找到名为 '{filename}' 的文件。请确认文件名是否完全准确。")
+                else:
+                    file_id = target_file.get("fileid")
+                    if await self.uploader.delete_file(file_id):
+                        yield event.plain_result(f"✅ 文件 '{filename}' 已删除。")
+                    else:
+                        yield event.plain_result(f"❌ 删除失败，请检查日志。")
+            
+            event.stop_event()
+            return
+
+        # 4. 处理 "下微盘" 指令
+        if message_str.startswith("下微盘"):
+            filename = message_str[3:].strip()
+            if not filename:
+                yield event.plain_result("⚠️ 请输入要下载的准确文件名，例如：下微盘 test.txt")
+                event.stop_event()
+                return
+
+            logger.info(f"[WeDriveUploader] 尝试下载文件: {filename}")
+            yield event.plain_result(f"🔍 正在查找文件 '{filename}' ...")
+
+            files = await self.uploader.list_files()
+            if files is None:
+                 yield event.plain_result(f"❌ 获取文件列表失败，无法下载。")
+            else:
+                # Extract list
+                file_list = files.get('item', []) if isinstance(files, dict) else files
+                if not isinstance(file_list, list):
+                    file_list = []
+                
+                # Find exact match
+                target_file = None
+                for f in file_list:
+                    if isinstance(f, dict) and f.get("file_name") == filename:
+                        target_file = f
+                        break
+                
+                if not target_file:
+                     yield event.plain_result(f"❌ 未找到名为 '{filename}' 的文件。请确认文件名是否完全准确。")
+                else:
+                    file_id = target_file.get("fileid")
+                    yield event.plain_result(f"📥 正在下载 '{filename}' 到服务器中转...")
+                    
+                    local_path = await self.uploader.download_file_to_local(file_id, filename)
+                    
+                    if local_path:
+                        try:
+                            # 生成服务器中转下载链接，有效期1小时
+                            token = await file_token_service.register_file(local_path, timeout=3600)
+                            
+                            base_url = astrbot_config.get("callback_api_base", "")
+                            if not base_url:
+                                host = astrbot_config.get("server_host", "0.0.0.0")
+                                port = astrbot_config.get("server_port", 6185)
+                                if host == "0.0.0.0":
+                                    ips = get_local_ip_addresses()
+                                    host = "127.0.0.1"
+                                    for ip in ips:
+                                        if ip != "127.0.0.1":
+                                            host = ip
+                                            break 
+                                base_url = f"http://{host}:{port}"
+                            
+                            base_url = base_url.rstrip("/")
+                            download_link = f"{base_url}/api/file/{token}"
+                            
+                            msg = (
+                                f"✅ 文件已准备就绪\n"
+                                f"文件名: {filename}\n"
+                                f"下载链接 (1小时有效):\n{download_link}\n\n"
+                                f"提示: 此链接可直接在浏览器打开下载。"
+                            )
+                            yield event.plain_result(msg)
+                        except Exception as e:
+                            logger.error(f"[WeDriveUploader] 生成下载链接失败: {e}")
+                            yield event.plain_result(f"✅ 文件已下载至服务器: {local_path}\n(生成下载链接失败)")
+                    else:
+                        yield event.plain_result(f"❌ 下载失败，请检查日志。")
             
             event.stop_event()
             return
