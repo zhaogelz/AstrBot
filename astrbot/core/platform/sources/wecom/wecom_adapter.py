@@ -12,7 +12,7 @@ from wechatpy.exceptions import InvalidSignatureException
 from wechatpy.messages import BaseMessage
 
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import Image, Plain, Record
+from astrbot.api.message_components import Image, Plain, Record, File
 from astrbot.api.platform import (
     AstrBotMessage,
     MessageMember,
@@ -300,6 +300,41 @@ class WecomPlatformAdapter(Platform):
             abm.timestamp = msg.time
             abm.session_id = abm.sender.user_id
             abm.raw_message = msg
+        elif msg.type == "unknown" and msg._data.get("MsgType") == "file":
+            media_id = msg._data.get("MediaId")
+            resp: Response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.client.media.download,
+                media_id,
+            )
+            
+            filename = f"file_{media_id}"
+            if "Content-Disposition" in resp.headers:
+                parts = resp.headers["Content-Disposition"].split(";")
+                for part in parts:
+                    if "filename=" in part:
+                        filename = part.split("filename=")[1].strip('"')
+                        break
+
+            temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+            os.makedirs(temp_dir, exist_ok=True)
+            path = os.path.join(temp_dir, filename)
+            
+            with open(path, "wb") as f:
+                f.write(resp.content)
+
+            abm.message_str = f"[文件]"
+            abm.self_id = str(msg._data.get("AgentID", ""))
+            abm.message = [File(name=filename, file=path)]
+            abm.type = MessageType.FRIEND_MESSAGE
+            abm.sender = MessageMember(
+                msg.source,
+                msg.source,
+            )
+            abm.message_id = msg.id
+            abm.timestamp = msg.time
+            abm.session_id = abm.sender.user_id
+            abm.raw_message = msg
         else:
             logger.warning(f"暂未实现的事件: {msg.type}")
             return
@@ -359,6 +394,28 @@ class WecomPlatformAdapter(Platform):
                 return
 
             abm.message = [Record(file=path_wav, url=path_wav)]
+        elif msgtype == "file":
+            media_id = msg.get("file", {}).get("media_id", "")
+            resp: Response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.client.media.download,
+                media_id,
+            )
+            
+            filename = f"file_{media_id}"
+            if "Content-Disposition" in resp.headers:
+                parts = resp.headers["Content-Disposition"].split(";")
+                for part in parts:
+                    if "filename=" in part:
+                        filename = part.split("filename=")[1].strip('"')
+                        break
+
+            temp_dir = os.path.join(get_astrbot_data_path(), "temp")
+            path = os.path.join(temp_dir, filename)
+            with open(path, "wb") as f:
+                f.write(resp.content)
+            abm.message = [File(name=filename, file=path)]
+            abm.message_str = f"[文件]"
         else:
             logger.warning(f"未实现的微信客服消息事件: {msg}")
             return

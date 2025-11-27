@@ -6,6 +6,7 @@
 import asyncio
 import base64
 import hashlib
+import os
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -13,7 +14,7 @@ from typing import Any
 
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
-from astrbot.api.message_components import At, Image, Plain
+from astrbot.api.message_components import At, Image, Plain, File
 from astrbot.api.platform import (
     AstrBotMessage,
     MessageMember,
@@ -37,6 +38,7 @@ from .wecomai_utils import (
     format_session_id,
     generate_random_string,
     process_encrypted_image,
+    download_and_decrypt_file,
 )
 
 
@@ -178,8 +180,8 @@ class WecomAIBotAdapter(Platform):
             logger.warning(f"消息类型未知，忽略: {message_data}")
             return None
         session_id = self._extract_session_id(message_data)
-        if msgtype in ("text", "image", "mixed"):
-            # user sent a text / image / mixed message
+        if msgtype in ("text", "image", "mixed", "file"):
+            # user sent a text / image / mixed / file message
             try:
                 # create a brand-new unique stream_id for this message session
                 stream_id = f"{session_id}_{generate_random_string(10)}"
@@ -336,6 +338,8 @@ class WecomAIBotAdapter(Platform):
         image_base64 = []
 
         _img_url_to_process = []
+        _file_url_to_process = []
+        file_paths = []
         msg_items = []
 
         if msgtype == WecomAIBotConstants.MSG_TYPE_TEXT:
@@ -344,6 +348,25 @@ class WecomAIBotAdapter(Platform):
             _img_url_to_process.append(
                 WecomAIBotMessageParser.parse_image_message(message_data),
             )
+        elif msgtype == WecomAIBotConstants.MSG_TYPE_FILE:
+            file_info = WecomAIBotMessageParser.parse_file_message(message_data)
+            
+            # DEBUG: Print full file_info and message_data
+            import json
+            try:
+                logger.info(f"[WeComAI DEBUG] File Message Data: {json.dumps(message_data, ensure_ascii=False)}")
+                logger.info(f"[WeComAI DEBUG] Parsed File Info: {file_info}")
+            except:
+                pass
+
+            if file_info and file_info.get("url"):
+                # 优先查找 filename 或 file_name 字段
+                filename = file_info.get("filename") or file_info.get("file_name")
+                _file_url_to_process.append((file_info.get("url"), filename))
+                content = f"[文件: {filename}]" if filename else "[文件]"
+            else:
+                logger.warning(f"文件消息未包含URL: {message_data}")
+                content = "[文件(无法下载)]"
         elif msgtype == WecomAIBotConstants.MSG_TYPE_MIXED:
             # 提取混合消息中的文本内容
             msg_items = WecomAIBotMessageParser.parse_mixed_message(message_data)
@@ -373,6 +396,19 @@ class WecomAIBotAdapter(Platform):
                     image_base64.append(result)
                 else:
                     logger.error(f"处理加密图片失败: {result}")
+
+        # 并行处理文件下载和解密
+        if _file_url_to_process:
+            tasks = [
+                download_and_decrypt_file(url, self.encoding_aes_key, filename)
+                for url, filename in _file_url_to_process
+            ]
+            results = await asyncio.gather(*tasks)
+            for success, result in results:
+                if success:
+                    file_paths.append(result)
+                else:
+                    logger.error(f"处理文件失败: {result}")
 
         # 构建 AstrBotMessage
         abm = AstrBotMessage()
@@ -404,9 +440,14 @@ class WecomAIBotAdapter(Platform):
             abm.message_str = abm.message_str.replace(f"@{self.bot_name}", "").strip()
             abm.message.append(At(qq=self.bot_name, name=self.bot_name))
         abm.message.append(Plain(abm.message_str))
+        
         if image_base64:
             for img_b64 in image_base64:
                 abm.message.append(Image.fromBase64(img_b64))
+
+        if file_paths:
+            for path in file_paths:
+                abm.message.append(File(name=os.path.basename(path), file=path))
 
         logger.debug(f"WecomAIAdapter: {abm.message}")
         return abm

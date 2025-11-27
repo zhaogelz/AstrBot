@@ -360,6 +360,23 @@ class WecomAIBotMessageParser:
             return None
 
     @staticmethod
+    def parse_file_message(data: dict[str, Any]) -> dict[str, Any] | None:
+        """解析文件消息
+
+        Args:
+            data: 消息数据
+
+        Returns:
+            文件信息字典 (包含 url, media_id 等)，解析失败返回 None
+
+        """
+        try:
+            return data.get("file", {})
+        except (KeyError, TypeError):
+            logger.warning("文件消息解析失败")
+            return None
+
+    @staticmethod
     def parse_stream_message(data: dict[str, Any]) -> dict[str, Any] | None:
         """解析流消息
 

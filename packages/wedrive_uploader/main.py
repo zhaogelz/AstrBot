@@ -1,0 +1,124 @@
+import json
+import os
+import aiohttp
+import logging
+from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.star import Star, Context
+from astrbot.api.message_components import File, Image, Video
+from .token_manager import TokenManager
+from .uploader import WeDriveUploader
+
+logger = logging.getLogger("astrbot")
+
+class WeDriveUploaderPlugin(Star):
+    def __init__(self, context: Context):
+        super().__init__(context)
+        self.config = self._load_config()
+        
+        if not self.config:
+            logger.warning("[WeDriveUploader] 未配置 corpid/secret，插件无法工作。请修改 data/config/wedrive_uploader.json")
+            self.uploader = None
+        else:
+            self.token_mgr = TokenManager(
+                corpid=self.config['corpid'],
+                secret=self.config['secret'],
+                hardcoded_token=self.config.get('debug_token'),
+                save_token_callback=self._save_token
+            )
+            self.uploader = WeDriveUploader(
+                token_mgr=self.token_mgr,
+                space_id=self.config['space_id']
+            )
+
+    def _save_token(self, token):
+        """保存 Token 到配置文件"""
+        if self.config:
+            self.config['debug_token'] = token
+            config_path = os.path.join("data/config", "wedrive_uploader.json")
+            try:
+                with open(config_path, "w", encoding="utf-8") as f:
+                    json.dump(self.config, f, indent=4, ensure_ascii=False)
+                logger.info(f"[WeDriveUploader] Token 已更新并保存到配置文件")
+            except Exception as e:
+                logger.error(f"[WeDriveUploader] 保存配置文件失败: {e}")
+
+    def _load_config(self):
+        """加载或创建配置文件"""
+        config_dir = "data/config"
+        config_path = os.path.join(config_dir, "wedrive_uploader.json")
+        
+        if not os.path.exists(config_dir):
+            os.makedirs(config_dir, exist_ok=True)
+            
+        if not os.path.exists(config_path):
+            default_config = {
+                "corpid": "",
+                "secret": "",
+                "space_id": ""
+            }
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=4, ensure_ascii=False)
+            logger.info(f"[WeDriveUploader] 配置文件已生成: {config_path}，请填写后重启 AstrBot")
+            return None
+            
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = json.load(f)
+                if not all([config.get('corpid'), config.get('secret'), config.get('space_id')]):
+                    return None
+                return config
+        except Exception as e:
+            logger.error(f"[WeDriveUploader] 读取配置文件失败: {e}")
+            return None
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def on_message(self, event: AstrMessageEvent):
+        """监听所有消息，筛选文件进行上传"""
+        if not self.uploader:
+            return
+
+        message_chain = event.message_obj.message
+        
+        # 调试日志：打印收到的消息组件类型
+        logger.info(f"[WeDriveUploader] 收到消息: {[type(c) for c in message_chain]}")
+        
+        for component in message_chain:
+            # 检查是否是文件类型 (File, Image, Video)
+            # 这里主要针对 File，如果需要支持图片/视频自动归档也可以加上
+            if isinstance(component, (File, Image, Video)):
+                logger.info(f"[WeDriveUploader] 检测到文件消息，准备处理...")
+                
+                # 获取文件本地路径 (AstrBot 会自动下载)
+                try:
+                    # get_file() 通常返回一个路径字符串
+                    # 注意：对于 Image/Video，可能需要 save=True 参数或者其他处理，
+                    # 但 File 组件通常已经有路径或 url
+                    # AstrBot 的 File 组件如果有 file 属性指向本地路径
+                    file_path = None
+                    
+                    if hasattr(component, 'file') and component.file and os.path.exists(component.file):
+                        file_path = component.file
+                    elif hasattr(component, 'path') and component.path and os.path.exists(component.path):
+                        file_path = component.path
+                    else:
+                        # 尝试调用可能存在的下载方法
+                        # 在某些适配器中，可能需要显式下载
+                        # 这里假设框架已经处理了下载，或者组件提供了路径
+                        pass
+
+                    if not file_path:
+                         logger.warning(f"[WeDriveUploader] 无法获取文件本地路径，跳过上传。")
+                         continue
+
+                    logger.info(f"[WeDriveUploader] 开始上传文件: {file_path}")
+                    yield event.plain_result(f"📥 正在归档文件到微盘...")
+                    
+                    file_id = await self.uploader.upload_file(file_path)
+                    
+                    if file_id:
+                        yield event.plain_result(f"✅ 文件已归档至微盘。\nFileID: {file_id}")
+                    else:
+                        yield event.plain_result(f"❌ 文件归档失败，请检查日志。")
+                        
+                except Exception as e:
+                    logger.error(f"[WeDriveUploader] 处理文件异常: {e}")

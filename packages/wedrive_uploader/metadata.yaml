@@ -1,0 +1,4 @@
+name: wedrive_uploader
+version: 1.0.0
+author: AstrBot
+desc: 自动上传接收到的文件到企业微信微盘
