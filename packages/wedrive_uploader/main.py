@@ -245,12 +245,8 @@ class WeDriveUploaderPlugin(Star):
                                 host = astrbot_config.get("server_host", "0.0.0.0")
                                 port = astrbot_config.get("server_port", 6185)
                                 if host == "0.0.0.0":
-                                    ips = get_local_ip_addresses()
-                                    host = "127.0.0.1"
-                                    for ip in ips:
-                                        if ip != "127.0.0.1":
-                                            host = ip
-                                            break 
+                                    # 用户指定的公网 IP
+                                    host = "120.78.125.194"
                                 base_url = f"http://{host}:{port}"
                             
                             base_url = base_url.rstrip("/")
