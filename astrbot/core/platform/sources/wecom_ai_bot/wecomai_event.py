@@ -3,6 +3,7 @@
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain
 from astrbot.api.message_components import (
+    File,
     Image,
     Plain,
 )
@@ -82,6 +83,20 @@ class WecomAIBotMessageEvent(AstrMessageEvent):
                         logger.warning("图片数据为空，跳过")
                 except Exception as e:
                     logger.error("处理图片消息失败: %s", e)
+            elif isinstance(comp, File):
+                # 企业微信智能机器人暂不支持直接发送文件
+                # 降级为发送文本提示
+                file_name = comp.name or "未知文件"
+                logger.warning(f"[WecomAI] 暂不支持发送文件组件: {file_name}")
+                data = f"[文件: {file_name}]\n(企业微信智能机器人暂不支持直接发送文件，请联系管理员获取)"
+                await back_queue.put(
+                    {
+                        "type": "plain",
+                        "data": data,
+                        "streaming": streaming,
+                        "session_id": stream_id,
+                    },
+                )
             else:
                 logger.warning(f"[WecomAI] 不支持的消息组件类型: {type(comp)}, 跳过")
 

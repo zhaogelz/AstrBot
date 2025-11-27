@@ -73,7 +73,7 @@ class FileTokenService:
             return file_token
 
     async def handle_file(self, file_token: str) -> str:
-        """根据令牌获取文件路径，使用后令牌失效。
+        """根据令牌获取文件路径。
 
         Args:
             file_token(str): 注册时返回的令牌
@@ -92,7 +92,7 @@ class FileTokenService:
             if file_token not in self.staged_files:
                 raise KeyError(f"无效或过期的文件 token: {file_token}")
 
-            file_path, _ = self.staged_files.pop(file_token)
+            file_path, _ = self.staged_files[file_token]
             if not os.path.exists(file_path):
                 raise FileNotFoundError(f"文件不存在: {file_path}")
             return file_path

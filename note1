@@ -5,6 +5,12 @@
 搜微盘 <关键字>，例如：
    * 搜微盘 报告
 
+删微盘 <准确文件名>，例如：
+   * 删微盘 test.txt
+
+下微盘 <准确文件名>，例如：
+   * 下微盘 test.txt
+
 
 1、获取access_token  （可能两小时更新一次）
 curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&corpsecret=uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"

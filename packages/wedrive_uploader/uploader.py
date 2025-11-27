@@ -321,3 +321,141 @@ class WeDriveUploader:
                     logger.error(f"❌ 获取列表网络异常: {e}")
                     return None
         return None
+
+    async def delete_file(self, file_id):
+        """
+        删除微盘文件
+        """
+        logger.info(f"🗑️ 正在删除文件 (FileID: {file_id})...")
+        
+        async with aiohttp.ClientSession() as session:
+            for retry in range(2):
+                access_token = await self.token_mgr.get_token()
+                if not access_token: return False
+
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_delete?access_token={access_token}"
+                payload = {
+                    "fileid": [file_id]
+                }
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        res_data = await resp.json()
+                        if res_data.get("errcode") == 0:
+                            logger.info(f"✅ 删除成功")
+                            return True
+                        elif res_data.get("errcode") in [40014, 42001, 41001]:
+                            logger.warning(f"⚠️ 删除时Token失效，刷新重试...")
+                            await self.token_mgr.get_token(force_refresh=True)
+                            continue
+                        else:
+                            logger.error(f"❌ 删除失败: {res_data}")
+                            return False
+                except Exception as e:
+                    logger.error(f"❌ 删除网络异常: {e}")
+                    return False
+        return False
+
+    async def get_download_info(self, file_id):
+        """
+        获取文件下载信息 (URL 和 Cookie)
+        """
+        logger.info(f"📥 正在请求下载地址 (FileID: {file_id})...")
+        
+        async with aiohttp.ClientSession() as session:
+            for retry in range(2):
+                access_token = await self.token_mgr.get_token()
+                if not access_token: return None
+
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_download?access_token={access_token}"
+                payload = {"fileid": file_id}
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        res_data = await resp.json()
+                        if res_data.get("errcode") == 0:
+                            return {
+                                "download_url": res_data.get("download_url"),
+                                "cookie_name": res_data.get("cookie_name"),
+                                "cookie_value": res_data.get("cookie_value")
+                            }
+                        elif res_data.get("errcode") in [40014, 42001, 41001]:
+                            logger.warning(f"⚠️ 下载预备时Token失效，刷新重试...")
+                            await self.token_mgr.get_token(force_refresh=True)
+                            continue
+                        else:
+                            logger.error(f"❌ 获取下载地址失败: {res_data}")
+                            return None
+                except Exception as e:
+                    logger.error(f"❌ 获取下载地址异常: {e}")
+                    return None
+        return None
+
+    async def download_file_to_local(self, file_id, file_name, save_dir="data/temp"):
+        """
+        下载文件到本地
+        """
+        # 清理 save_dir 中超过24小时的旧文件
+        if os.path.exists(save_dir):
+            try:
+                now = time.time()
+                for f in os.listdir(save_dir):
+                    f_path = os.path.join(save_dir, f)
+                    if os.path.isfile(f_path):
+                        if now - os.path.getmtime(f_path) > 24 * 3600:  # 24小时
+                            try:
+                                os.remove(f_path)
+                                logger.info(f"🧹 已清理过期临时文件: {f_path}")
+                            except Exception as e:
+                                logger.warning(f"⚠️ 清理文件失败 {f_path}: {e}")
+            except Exception as e:
+                logger.warning(f"⚠️ 自动清理临时目录异常: {e}")
+
+        info = await self.get_download_info(file_id)
+        if not info: return None
+        
+        download_url = info["download_url"]
+        cookie_name = info["cookie_name"]
+        cookie_value = info["cookie_value"]
+
+        async with aiohttp.ClientSession() as session:
+            # 2. 下载文件流
+            logger.info(f"📥 开始下载文件流...")
+            logger.info(f"[Debug] URL: {download_url}")
+            
+            headers = {}
+            if cookie_name and cookie_value:
+                # 修正: 官方文档指示直接使用 cookie_name=cookie_value
+                # 实测替换 & 为 ; 会导致 400 错误，说明 authkey 可能就是一个包含 & 的长字符串，
+                # 或者服务端不接受标准分号分隔。
+                # 必须手动构造 Header 以避免 aiohttp 对特殊字符进行 URL 编码。
+                cookie_str = f"{cookie_name}={cookie_value}"
+                headers["Cookie"] = cookie_str
+                logger.info(f"[Debug] Cookie Header: {cookie_str}")
+            
+            try:
+                async with session.get(download_url, headers=headers) as resp:
+                    if resp.status != 200:
+                        logger.error(f"❌ 下载请求失败，状态码: {resp.status}")
+                        try:
+                            logger.error(f"❌ 响应内容: {await resp.text()}")
+                        except:
+                            pass
+                        return None
+                    
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir, exist_ok=True)
+                        
+                    save_path = os.path.join(save_dir, file_name)
+                    
+                    with open(save_path, "wb") as f:
+                        while True:
+                            chunk = await resp.content.read(1024 * 1024) # 1MB chunks
+                            if not chunk: break
+                            f.write(chunk)
+                    
+                    logger.info(f"✅ 文件已下载: {save_path}")
+                    return os.path.abspath(save_path)
+            except Exception as e:
+                logger.error(f"❌ 下载文件流异常: {e}")
+                return None
