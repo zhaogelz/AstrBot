@@ -118,6 +118,47 @@ class WeDriveUploaderPlugin(Star):
             event.stop_event()
             return
 
+        # 2. 处理 "搜微盘" 指令
+        if message_str.startswith("搜微盘"):
+            keyword = message_str[3:].strip()
+            if not keyword:
+                yield event.plain_result("⚠️ 请输入要搜索的文件名，例如：搜微盘 报告")
+                event.stop_event()
+                return
+
+            logger.info(f"[WeDriveUploader] 搜索文件: {keyword}")
+            yield event.plain_result(f"🔍 正在搜索包含 '{keyword}' 的文件...")
+
+            files = await self.uploader.list_files()
+            if files is None:
+                 yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
+            else:
+                # Extract list
+                file_list = files.get('item', []) if isinstance(files, dict) else files
+                if not isinstance(file_list, list):
+                    file_list = []
+                
+                matched = [f for f in file_list if isinstance(f, dict) and keyword in f.get("file_name", "")]
+                
+                if not matched:
+                     yield event.plain_result(f"📂 未找到包含 '{keyword}' 的文件。")
+                else:
+                    msg = f"🔍 搜索结果 (共{len(matched)}个):\n"
+                    for f in matched:
+                        name = f.get("file_name", "未知文件")
+                        size = int(f.get("file_size", 0))
+                        if size < 1024:
+                            size_str = f"{size}B"
+                        elif size < 1024 * 1024:
+                            size_str = f"{size/1024:.1f}KB"
+                        else:
+                            size_str = f"{size/1024/1024:.1f}MB"
+                        msg += f"- {name} ({size_str})\n"
+                    yield event.plain_result(msg)
+            
+            event.stop_event()
+            return
+
         message_chain = event.message_obj.message
         
         # 调试日志：打印收到的消息组件类型
