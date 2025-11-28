@@ -123,6 +123,7 @@ class WeDriveUploaderPlugin(Star):
             help_text = (
                 "微盘助手指令说明：\n\n"
                 "查微盘：列出微盘中所有的文件\n\n"
+                "    查微盘\n\n"
                 "搜微盘 <关键字>，例如：\n\n"
                 "    搜微盘 es\n\n"
                 "删微盘 <准确文件名>，例如：\n\n"
