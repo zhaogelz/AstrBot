@@ -97,9 +97,10 @@ class SafeSHA1:
 
 
 class WeDriveUploader:
-    def __init__(self, token_mgr, space_id):
+    def __init__(self, token_mgr, space_id, agent_id):
         self.token_mgr = token_mgr
         self.space_id = space_id
+        self.agent_id = agent_id
         self.CHUNK_SIZE = 2 * 1024 * 1024
         self.MAX_CONCURRENT_UPLOADS = 3
 
@@ -459,3 +460,180 @@ class WeDriveUploader:
             except Exception as e:
                 logger.error(f"❌ 下载文件流异常: {e}")
                 return None
+
+    async def upload_to_webhook(self, file_path, webhook_key):
+        """
+        上传文件到 Webhook 获取 media_id
+        (手动构建 multipart 以解决中文乱码问题)
+        """
+        if not os.path.exists(file_path):
+            logger.error(f"❌ 文件不存在: {file_path}")
+            return None
+
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/upload_media?key={webhook_key}&type=file"
+        filename = os.path.basename(file_path)
+        
+        # 使用时间戳生成简单的 boundary
+        boundary = f"----WebKitFormBoundary{int(time.time() * 1000)}"
+        content_type = 'application/octet-stream'
+        
+        async def producer():
+            # Part Header
+            # 显式使用 UTF-8 编码 filename，不进行 RFC 5987 转义，兼容企微
+            safe_filename = filename.replace('"', '\\"')
+            header = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="media"; filename="{safe_filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            )
+            yield header.encode('utf-8')
+            
+            # File Content
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            
+            # Footer
+            footer = f"\r\n--{boundary}--\r\n"
+            yield footer.encode('utf-8')
+
+        headers = {
+            'Content-Type': f'multipart/form-data; boundary={boundary}'
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, data=producer(), headers=headers) as resp:
+                    res_data = await resp.json()
+                    if res_data.get("errcode") == 0:
+                        media_id = res_data.get("media_id")
+                        logger.info(f"✅ Webhook 素材上传成功, media_id: {media_id}")
+                        return media_id
+                    else:
+                        logger.error(f"❌ Webhook 素材上传失败: {res_data}")
+                        return None
+            except Exception as e:
+                logger.error(f"❌ Webhook 素材上传异常: {e}")
+                return None
+
+    async def push_file_via_webhook(self, media_id, webhook_key):
+        """
+        通过 Webhook 推送文件
+        """
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key={webhook_key}"
+        payload = {
+            "msgtype": "file",
+            "file": {
+                "media_id": media_id
+            }
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, json=payload) as resp:
+                    res_data = await resp.json()
+                    if res_data.get("errcode") == 0:
+                        logger.info(f"✅ Webhook 推送成功")
+                        return True
+                    else:
+                        logger.error(f"❌ Webhook 推送失败: {res_data}")
+                        return False
+            except Exception as e:
+                logger.error(f"❌ Webhook 推送异常: {e}")
+                return False
+
+    async def upload_media_via_token(self, file_path):
+        """
+        上传临时素材到应用 (使用 Token) 获取 media_id
+        (手动构建 multipart 以解决中文乱码问题)
+        """
+        if not os.path.exists(file_path):
+            logger.error(f"❌ 文件不存在: {file_path}")
+            return None
+            
+        access_token = await self.token_mgr.get_token()
+        if not access_token: return None
+
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/media/upload?access_token={access_token}&type=file"
+        filename = os.path.basename(file_path)
+        
+        # 使用时间戳生成简单的 boundary
+        boundary = f"----WebKitFormBoundary{int(time.time() * 1000)}"
+        content_type = 'application/octet-stream'
+        
+        async def producer():
+            # Part Header
+            # 显式使用 UTF-8 编码 filename，不进行 RFC 5987 转义，兼容企微
+            safe_filename = filename.replace('"', '\\"')
+            header = (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="media"; filename="{safe_filename}"\r\n'
+                f"Content-Type: {content_type}\r\n\r\n"
+            )
+            yield header.encode('utf-8')
+            
+            # File Content
+            with open(file_path, 'rb') as f:
+                while True:
+                    chunk = f.read(8192)
+                    if not chunk:
+                        break
+                    yield chunk
+            
+            # Footer
+            footer = f"\r\n--{boundary}--\r\n"
+            yield footer.encode('utf-8')
+
+        headers = {
+            'Content-Type': f'multipart/form-data; boundary={boundary}'
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, data=producer(), headers=headers) as resp:
+                    res_data = await resp.json()
+                    if res_data.get("errcode") == 0:
+                        media_id = res_data.get("media_id")
+                        logger.info(f"✅ 应用素材上传成功, media_id: {media_id}")
+                        return media_id
+                    else:
+                        logger.error(f"❌ 应用素材上传失败: {res_data}")
+                        return None
+            except Exception as e:
+                logger.error(f"❌ 应用素材上传异常: {e}")
+                return None
+
+    async def send_file_via_token(self, to_user, media_id):
+        """
+        通过应用 Token 推送文件给用户
+        """
+        access_token = await self.token_mgr.get_token()
+        if not access_token: return False
+        
+        url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={access_token}"
+        payload = {
+            "touser": to_user,
+            "msgtype": "file",
+            "agentid": self.agent_id, 
+            "file": {
+                "media_id": media_id
+            },
+            "safe": 0
+        }
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(url, json=payload) as resp:
+                    res_data = await resp.json()
+                    if res_data.get("errcode") == 0:
+                        logger.info(f"✅ 应用消息推送成功")
+                        return True
+                    else:
+                        logger.error(f"❌ 应用消息推送失败: {res_data}")
+                        return False
+            except Exception as e:
+                logger.error(f"❌ 应用消息推送异常: {e}")
+                return False

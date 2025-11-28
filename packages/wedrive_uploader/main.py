@@ -7,6 +7,7 @@ from astrbot.api.star import Star, Context
 from astrbot.api.message_components import File, Image, Video
 from astrbot.core import file_token_service, astrbot_config
 from astrbot.core.utils.io import get_local_ip_addresses
+from astrbot.core.platform import MessageType
 from .token_manager import TokenManager
 from .uploader import WeDriveUploader
 
@@ -29,7 +30,8 @@ class WeDriveUploaderPlugin(Star):
             )
             self.uploader = WeDriveUploader(
                 token_mgr=self.token_mgr,
-                space_id=self.config['space_id']
+                space_id=self.config['space_id'],
+                agent_id=self.config.get('agent_id', 1000002)
             )
 
     def _save_token(self, token):
@@ -56,7 +58,9 @@ class WeDriveUploaderPlugin(Star):
             default_config = {
                 "corpid": "",
                 "secret": "",
-                "space_id": ""
+                "space_id": "",
+                "agent_id": 1000002,
+                "webhook_key": "25994ab1-6b0b-4059-a47b-eebf5bd20e19"
             }
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(default_config, f, indent=4, ensure_ascii=False)
@@ -79,8 +83,41 @@ class WeDriveUploaderPlugin(Star):
         if not self.uploader:
             return
 
-        # 1. 处理 "查看微盘" 指令
+        # 预处理消息：移除可能的 At 前缀
+        # event.message_str 可能会包含 "@机器人名称 "
         message_str = event.message_str.strip()
+        
+        # 简单的去 At 处理：如果消息以 @ 开头，尝试找到第一个空格并截断
+        # 更加鲁棒的方式是遍历 message components，但这需要更多代码。
+        # 这里采用简单策略：如果包含 "下微盘" 等指令，直接提取指令及之后的部分
+        
+        cmd_map = {
+            "查看微盘": "查看微盘",
+            "搜微盘": "搜微盘",
+            "删微盘": "删微盘",
+            "下微盘": "下微盘"
+        }
+        
+        target_cmd = None
+        clean_msg = message_str
+        
+        for cmd in cmd_map:
+            if cmd in message_str:
+                # 找到指令起始位置
+                idx = message_str.find(cmd)
+                # 确保指令前是空格或开头 (避免匹配到 "上下微盘")
+                if idx == 0 or message_str[idx-1].isspace() or message_str[idx-1] == ']': # ] for [At:xxx]
+                    target_cmd = cmd
+                    clean_msg = message_str[idx:]
+                    break
+        
+        if not target_cmd:
+            # 如果没匹配到指令，再检查是否是普通文件上传消息
+            pass
+        else:
+            message_str = clean_msg
+
+        # 1. 处理 "查看微盘" 指令
         if message_str == "查看微盘":
             logger.info(f"[WeDriveUploader] 收到查看微盘指令")
             yield event.plain_result(f"📂 正在获取微盘文件列表...")
@@ -231,37 +268,49 @@ class WeDriveUploaderPlugin(Star):
                      yield event.plain_result(f"❌ 未找到名为 '{filename}' 的文件。请确认文件名是否完全准确。")
                 else:
                     file_id = target_file.get("fileid")
-                    yield event.plain_result(f"📥 正在下载 '{filename}' 到服务器中转...")
+                    yield event.plain_result(f"📥 正在下载 '{filename}' 并推送...")
                     
                     local_path = await self.uploader.download_file_to_local(file_id, filename)
                     
                     if local_path:
                         try:
-                            # 生成服务器中转下载链接，有效期1小时
-                            token = await file_token_service.register_file(local_path, timeout=3600)
+                            # 判断是私聊还是群聊
+                            is_group = (hasattr(event.message_obj, 'group_id') and event.message_obj.group_id) or (event.message_obj.type == MessageType.GROUP_MESSAGE)
                             
-                            base_url = astrbot_config.get("callback_api_base", "")
-                            if not base_url:
-                                host = astrbot_config.get("server_host", "0.0.0.0")
-                                port = astrbot_config.get("server_port", 6185)
-                                if host == "0.0.0.0":
-                                    # 用户指定的公网 IP
-                                    host = "120.78.125.194"
-                                base_url = f"http://{host}:{port}"
-                            
-                            base_url = base_url.rstrip("/")
-                            download_link = f"{base_url}/api/file/{token}"
-                            
-                            msg = (
-                                f"✅ 文件已准备就绪\n"
-                                f"文件名: {filename}\n"
-                                f"下载链接 (1小时有效):\n{download_link}\n\n"
-                                f"提示: 此链接可直接在浏览器打开下载。"
-                            )
-                            yield event.plain_result(msg)
+                            if is_group:
+                                # 群聊：走 Webhook 推送
+                                webhook_key = self.config.get("webhook_key", "25994ab1-6b0b-4059-a47b-eebf5bd20e19")
+                                media_id = await self.uploader.upload_to_webhook(local_path, webhook_key)
+                                
+                                if media_id:
+                                    success = await self.uploader.push_file_via_webhook(media_id, webhook_key)
+                                    if success:
+                                        yield event.plain_result(f"✅ 文件 '{filename}' 已通过 Webhook 推送到群。")
+                                    else:
+                                        yield event.plain_result(f"❌ Webhook 推送失败，请检查日志。")
+                                else:
+                                    yield event.plain_result(f"❌ 上传到 Webhook 失败，请检查日志。")
+                            else:
+                                # 私聊：走应用消息推送
+                                # 获取发送者 UserID
+                                to_user = event.message_obj.sender.user_id
+                                if not to_user:
+                                     yield event.plain_result(f"❌ 无法获取您的 UserID，无法推送。")
+                                else:
+                                    media_id = await self.uploader.upload_media_via_token(local_path)
+                                    
+                                    if media_id:
+                                        success = await self.uploader.send_file_via_token(to_user, media_id)
+                                        if success:
+                                            yield event.plain_result(f"✅ 文件 '{filename}' 已推送到您的私聊。")
+                                        else:
+                                            yield event.plain_result(f"❌ 应用消息推送失败，请检查 AgentID 是否正确 (默认1000002)。")
+                                    else:
+                                        yield event.plain_result(f"❌ 素材上传失败，请检查日志。")
+
                         except Exception as e:
-                            logger.error(f"[WeDriveUploader] 生成下载链接失败: {e}")
-                            yield event.plain_result(f"✅ 文件已下载至服务器: {local_path}\n(生成下载链接失败)")
+                            logger.error(f"[WeDriveUploader] 推送流程异常: {e}")
+                            yield event.plain_result(f"❌ 推送异常: {e}")
                     else:
                         yield event.plain_result(f"❌ 下载失败，请检查日志。")
             

@@ -11,6 +11,8 @@
 下微盘 <准确文件名>，例如：
    * 下微盘 test.txt
 
+data /config / wedrive_uploader.json 填写配置文件依次为：// 企业ID// 应用的凭证密钥//  微盘空间ID// 调试Token，可选// 应用ID// 消息推送机器人key
+
 nohup uv run main.py > output.log 2>&1 &
 
 # 查找进程
