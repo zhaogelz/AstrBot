@@ -11,6 +11,13 @@
 下微盘 <准确文件名>，例如：
    * 下微盘 test.txt
 
+nohup uv run main.py > output.log 2>&1 &
+
+# 查找进程
+ps -ef | grep "uv run main.py"
+
+# 杀死进程 (替换 12345 为实际 PID)
+kill 12345
 
 1、获取access_token  （可能两小时更新一次）
 curl "https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=wwa9748681bdece041&corpsecret=uZMI2VQluqGxhGIdRxdNZRH0MF_7foL2Cb5JuAc2gBk"

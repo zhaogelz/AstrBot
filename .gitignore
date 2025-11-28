@@ -15,6 +15,7 @@ botpy.log
 logs/
 temp
 cookies.json
+output.log
 
 # Data files
 data_v2.db
