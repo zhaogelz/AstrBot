@@ -2,6 +2,7 @@ import json
 import os
 import aiohttp
 import logging
+import asyncio
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Star, Context
 from astrbot.api.message_components import File, Image, Video
@@ -17,6 +18,8 @@ class WeDriveUploaderPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         self.config = self._load_config()
+        self.recycle_bin_id = None
+        self.init_lock = asyncio.Lock()
         
         if not self.config:
             logger.warning("[WeDriveUploader] 未配置 corpid/secret，插件无法工作。请修改 data/config/wedrive_uploader.json")
@@ -33,6 +36,30 @@ class WeDriveUploaderPlugin(Star):
                 space_id=self.config['space_id'],
                 agent_id=self.config.get('agent_id', 1000002)
             )
+
+    async def _init_recycle_bin(self):
+        async with self.init_lock:
+            if self.recycle_bin_id is not None:
+                return # Already initialized
+
+            logger.info("[WeDriveUploader] 初始化回收站文件夹...")
+            recycle_bin_name = "回收站"
+            
+            # Check if recycle bin exists, create if not
+            recycle_bin_folder = await self.uploader.get_file_by_path(recycle_bin_name)
+            if recycle_bin_folder and recycle_bin_folder.get('file_type') == 1:
+                self.recycle_bin_id = recycle_bin_folder.get('fileid')
+                logger.info(f"✅ 回收站文件夹已存在，ID: {self.recycle_bin_id}")
+            else:
+                logger.info(f"⚠️ 回收站文件夹不存在，正在创建...")
+                created_id = await self.uploader.create_folder_by_path(recycle_bin_name)
+                if created_id:
+                    self.recycle_bin_id = created_id
+                    logger.info(f"✅ 回收站文件夹创建成功，ID: {self.recycle_bin_id}")
+                else:
+                    logger.error(f"❌ 无法创建回收站文件夹！删除功能将受影响。")
+            
+            return self.recycle_bin_id is not None
 
     def _save_token(self, token):
         """保存 Token 到配置文件"""
@@ -157,8 +184,9 @@ class WeDriveUploaderPlugin(Star):
                 "  - 下载根目录文件 (如: 下 test.txt)\n"
                 "  - 下载指定路径文件 (如: 下 资料/报告.pdf)\n\n"
                 "删 <路径>\n"
-                "  - 删除根目录文件 (如: 删 test.txt)\n"
-                "  - 删除指定路径文件或文件夹 (如: 删 资料/过期文件.doc)\n\n"
+                "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
+                "  - 第一次删除示例：删 测试/test.txt\n\n"
+                "  - 第二次删除示例：删 回收站/test.txt\n\n"
                 "建 <路径>\n"
                 "  - 递归创建文件夹 (如: 建 资料/2025/备份)\n\n"
                 "移 <源路径> <目标路径>\n"
@@ -315,6 +343,28 @@ class WeDriveUploaderPlugin(Star):
 
         # 3. 处理 "删" 指令
         if message_str.startswith("删 "):
+            # --- Start: Recycle bin and Admin check ---
+            if self.uploader is None:
+                yield event.plain_result(f"❌ 微盘服务未初始化，请检查配置。")
+                event.stop_event()
+                return
+
+            # Init recycle bin if not already
+            if self.recycle_bin_id is None:
+                if not await self._init_recycle_bin():
+                    yield event.plain_result(f"❌ 回收站初始化失败，无法执行删除操作。")
+                    event.stop_event()
+                    return
+
+            # Admin check
+            admins = self.config.get("admins", [])
+            sender_id = event.message_obj.sender.user_id # Assuming user_id is reliable and unique
+            if sender_id not in admins:
+                yield event.plain_result(f"❌ 权限不足：您 ({sender_id}) 没有删除操作的权限。请联系管理员添加您的 UserID。")
+                event.stop_event()
+                return
+            # --- End: Recycle bin and Admin check ---
+
             path_str = message_str[1:].strip()
             if not path_str:
                 yield event.plain_result("⚠️ 请输入要删除的文件或文件夹路径，例如：删 test.txt")
@@ -322,26 +372,42 @@ class WeDriveUploaderPlugin(Star):
                 return
 
             logger.info(f"[WeDriveUploader] 尝试删除: {path_str}")
-            yield event.plain_result(f"🗑️ 正在查找并删除 '{path_str}' ...")
+            yield event.plain_result(f"🗑️ 正在查找并处理 '{path_str}' ...")
 
             # Use get_file_by_path to resolve the file/folder
-            target_file = await self.uploader.get_file_by_path(path_str)
+            target_file_obj = await self.uploader.get_file_by_path(path_str)
             
-            if not target_file:
+            if not target_file_obj:
                  yield event.plain_result(f"❌ 未找到路径 '{path_str}'。请确认路径是否正确。")
-            else:
-                file_id = target_file.get("fileid")
-                file_name = target_file.get("file_name")
-                is_folder = (target_file.get("file_type") == 1)
-                type_str = "文件夹" if is_folder else "文件"
-                
-                # Optional: Double check safety for folders? 
-                # For now, we just execute delete.
-                
-                if await self.uploader.delete_file(file_id):
-                    yield event.plain_result(f"✅ {type_str} '{file_name}' 已删除。")
+                 event.stop_event()
+                 return
+            
+            file_id_to_delete = target_file_obj.get("fileid")
+            file_name_to_delete = target_file_obj.get("file_name")
+            
+            # Check if target is already in recycle bin
+            # path_str might be "回收站/somefile.txt"
+            # target_file_obj contains "fileid", "fatherid"
+            
+            # We need to get the path to the current target_file_obj.
+            # Get parent folder's ID
+            target_parent_id = target_file_obj.get('fatherid')
+            
+            # Compare with self.recycle_bin_id
+            if target_parent_id == self.recycle_bin_id:
+                # File is already in recycle bin, perform permanent delete
+                logger.info(f"🗑️ 路径 '{path_str}' 已在回收站中，执行永久删除。")
+                if await self.uploader.delete_file(file_id_to_delete):
+                    yield event.plain_result(f"✅ 已从回收站中永久删除 '{file_name_to_delete}'。")
                 else:
-                    yield event.plain_result(f"❌ 删除失败，请检查日志。")
+                    yield event.plain_result(f"❌ 永久删除失败，请检查日志。")
+            else:
+                # File is not in recycle bin, move to recycle bin
+                logger.info(f"🗑️ 路径 '{path_str}' 不在回收站中，移动到回收站。")
+                if await self.uploader.move_files([file_id_to_delete], self.recycle_bin_id):
+                    yield event.plain_result(f"✅ 已将 '{file_name_to_delete}' 移动到回收站。")
+                else:
+                    yield event.plain_result(f"❌ 移动到回收站失败，请检查日志。")
             
             event.stop_event()
             return
