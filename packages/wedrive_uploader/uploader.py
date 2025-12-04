@@ -504,6 +504,55 @@ class WeDriveUploader:
                     return False
         return False
 
+    async def create_folder_by_path(self, path_str):
+        """
+        递归创建文件夹 (支持 a/b/c)
+        """
+        if not path_str: return None
+        parts = [p for p in path_str.replace('\\', '/').split('/') if p]
+        current_father_id = self.space_id
+        
+        created_any = False
+        
+        for i, part in enumerate(parts):
+            # 1. Check if folder exists in current_father_id
+            found_folder_id = None
+            
+            start = 0
+            limit = 100
+            while True:
+                res = await self.list_files(fatherid=current_father_id, start=start, limit=limit)
+                if not res: break
+                items = res.get('item', [])
+                if not isinstance(items, list): break
+                if not items: break
+                
+                for item in items:
+                    # Check for folder type (1) and name match
+                    if item.get('file_name') == part and item.get('file_type') == 1:
+                        found_folder_id = item.get('fileid')
+                        break
+                
+                if found_folder_id: break
+                if len(items) < limit: break
+                start += limit
+            
+            if found_folder_id:
+                # Folder exists, move into it
+                current_father_id = found_folder_id
+            else:
+                # Folder doesn't exist, create it
+                logger.info(f"📂 递归创建: 在 {current_father_id} 下创建 '{part}'")
+                res = await self.create_folder(part, fatherid=current_father_id)
+                if res and res.get('errcode') == 0:
+                    current_father_id = res.get('fileid')
+                    created_any = True
+                else:
+                    logger.error(f"❌ 创建子文件夹 '{part}' 失败")
+                    return None
+        
+        return current_father_id
+
     async def delete_file(self, file_id):
         """
         删除微盘文件

@@ -149,19 +149,21 @@ class WeDriveUploaderPlugin(Star):
         if message_str == "帮助":
             help_text = (
                 "微盘助手指令说明 (单字指令需加空格)：\n\n"
-                "搜 [参数]：\n"
-                "  - 搜 (不加参数)：列出根目录所有文件\n"
-                "  - 搜 <文件名>：递归搜索全盘 (如: 搜 es)\n"
-                "  - 搜 <加路径>：递归搜索指定文件夹 (如: 搜 资料/es)\n\n"
-                "建 <文件夹名>，例如：\n\n"
-                "    建 资料\n\n"
-                "移 <源路径> <目标路径>，例如：\n\n"
-                "    移 test.txt 资料/备份\n"
-                "    移 资料/旧文件.txt /  (移动到根目录)\n\n"
-                "删 <准确文件名>，例如：\n\n"
-                "    删 test.txt\n\n"
-                "下 <准确文件名>，例如：\n\n"
-                "    下 test.txt"
+                "搜 <参数>\n"
+                "  - 不加参数：列出根目录所有文件\n"
+                "  - 加文件名：递归搜索全盘 (如: 搜 es)\n"
+                "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜 资料)\n\n"
+                "下 <路径>\n"
+                "  - 下载根目录文件 (如: 下 test.txt)\n"
+                "  - 下载指定路径文件 (如: 下 资料/报告.pdf)\n\n"
+                "删 <路径>\n"
+                "  - 删除根目录文件 (如: 删 test.txt)\n"
+                "  - 删除指定路径文件或文件夹 (如: 删 资料/过期文件.doc)\n\n"
+                "建 <路径>\n"
+                "  - 递归创建文件夹 (如: 建 资料/2025/备份)\n\n"
+                "移 <源路径> <目标路径>\n"
+                "  - 移动文件或文件夹 (如: 移 test.txt 资料/备份)\n"
+                "  - 移动到根目录使用 / (如: 移 资料/旧文件.txt /)"
             )
             yield event.plain_result(help_text)
             event.stop_event()
@@ -313,74 +315,59 @@ class WeDriveUploaderPlugin(Star):
 
         # 3. 处理 "删" 指令
         if message_str.startswith("删 "):
-            filename = message_str[1:].strip()
-            if not filename:
-                yield event.plain_result("⚠️ 请输入要删除的准确文件名，例如：删 test.txt")
+            path_str = message_str[1:].strip()
+            if not path_str:
+                yield event.plain_result("⚠️ 请输入要删除的文件或文件夹路径，例如：删 test.txt")
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 尝试删除文件: {filename}")
-            yield event.plain_result(f"🗑️ 正在查找并删除 '{filename}' ...")
+            logger.info(f"[WeDriveUploader] 尝试删除: {path_str}")
+            yield event.plain_result(f"🗑️ 正在查找并删除 '{path_str}' ...")
 
-            files = await self.uploader.list_files()
-            if files is None:
-                 yield event.plain_result(f"❌ 获取文件列表失败，无法删除。")
+            # Use get_file_by_path to resolve the file/folder
+            target_file = await self.uploader.get_file_by_path(path_str)
+            
+            if not target_file:
+                 yield event.plain_result(f"❌ 未找到路径 '{path_str}'。请确认路径是否正确。")
             else:
-                # Extract list
-                file_list = files.get('item', []) if isinstance(files, dict) else files
-                if not isinstance(file_list, list):
-                    file_list = []
+                file_id = target_file.get("fileid")
+                file_name = target_file.get("file_name")
+                is_folder = (target_file.get("file_type") == 1)
+                type_str = "文件夹" if is_folder else "文件"
                 
-                # Find exact match
-                target_file = None
-                for f in file_list:
-                    if isinstance(f, dict) and f.get("file_name") == filename:
-                        target_file = f
-                        break
+                # Optional: Double check safety for folders? 
+                # For now, we just execute delete.
                 
-                if not target_file:
-                     yield event.plain_result(f"❌ 未找到名为 '{filename}' 的文件。请确认文件名是否完全准确。")
+                if await self.uploader.delete_file(file_id):
+                    yield event.plain_result(f"✅ {type_str} '{file_name}' 已删除。")
                 else:
-                    file_id = target_file.get("fileid")
-                    if await self.uploader.delete_file(file_id):
-                        yield event.plain_result(f"✅ 文件 '{filename}' 已删除。")
-                    else:
-                        yield event.plain_result(f"❌ 删除失败，请检查日志。")
+                    yield event.plain_result(f"❌ 删除失败，请检查日志。")
             
             event.stop_event()
             return
 
         # 4. 处理 "下" 指令
         if message_str.startswith("下 "):
-            filename = message_str[1:].strip()
-            if not filename:
-                yield event.plain_result("⚠️ 请输入要下载的准确文件名，例如：下 test.txt")
+            path_str = message_str[1:].strip()
+            if not path_str:
+                yield event.plain_result("⚠️ 请输入要下载的文件路径，例如：下 资料/test.txt")
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 尝试下载文件: {filename}")
-            yield event.plain_result(f"🔍 正在查找文件 '{filename}' ...")
+            logger.info(f"[WeDriveUploader] 尝试下载文件: {path_str}")
+            yield event.plain_result(f"🔍 正在查找文件 '{path_str}' ...")
 
-            files = await self.uploader.list_files()
-            if files is None:
-                 yield event.plain_result(f"❌ 获取文件列表失败，无法下载。")
+            target_file = await self.uploader.get_file_by_path(path_str)
+            
+            if not target_file:
+                 yield event.plain_result(f"❌ 未找到文件 '{path_str}'。")
             else:
-                # Extract list
-                file_list = files.get('item', []) if isinstance(files, dict) else files
-                if not isinstance(file_list, list):
-                    file_list = []
-                
-                # Find exact match
-                target_file = None
-                for f in file_list:
-                    if isinstance(f, dict) and f.get("file_name") == filename:
-                        target_file = f
-                        break
-                
-                if not target_file:
-                     yield event.plain_result(f"❌ 未找到名为 '{filename}' 的文件。请确认文件名是否完全准确。")
+                # Check if it's a folder
+                if target_file.get("file_type") == 1:
+                    yield event.plain_result(f"❌ '{path_str}' 是一个文件夹，无法直接下载。")
                 else:
                     file_id = target_file.get("fileid")
+                    filename = target_file.get("file_name")
                     yield event.plain_result(f"📥 正在下载 '{filename}' 并推送...")
                     
                     local_path = await self.uploader.download_file_to_local(file_id, filename)
@@ -432,19 +419,19 @@ class WeDriveUploaderPlugin(Star):
 
         # 5. 处理 "建" 指令
         if message_str.startswith("建 "):
-            folder_name = message_str[1:].strip()
-            if not folder_name:
-                yield event.plain_result("⚠️ 请输入要创建的文件夹名称，例如：建 资料备份")
+            path_str = message_str[1:].strip()
+            if not path_str:
+                yield event.plain_result("⚠️ 请输入要创建的文件夹路径，例如：建 资料/2025/备份")
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 尝试创建文件夹: {folder_name}")
-            yield event.plain_result(f"📂 正在创建文件夹 '{folder_name}' ...")
+            logger.info(f"[WeDriveUploader] 尝试创建文件夹: {path_str}")
+            yield event.plain_result(f"📂 正在创建文件夹 '{path_str}' ...")
 
-            result = await self.uploader.create_folder(folder_name)
+            result_id = await self.uploader.create_folder_by_path(path_str)
             
-            if result:
-                 yield event.plain_result(f"✅ 文件夹 '{folder_name}' 创建成功。")
+            if result_id:
+                 yield event.plain_result(f"✅ 文件夹 '{path_str}' (及必要父目录) 创建/确认成功。")
             else:
                  yield event.plain_result(f"❌ 创建失败，请检查日志。")
             
