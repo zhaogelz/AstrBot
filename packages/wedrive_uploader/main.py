@@ -97,6 +97,7 @@ class WeDriveUploaderPlugin(Star):
             "删微盘": "删微盘",
             "下微盘": "下微盘",
             "新建": "新建",
+            "移": "移",
             "帮助": "帮助"
         }
         
@@ -129,6 +130,9 @@ class WeDriveUploaderPlugin(Star):
                 "    搜微盘 es\n\n"
                 "新建 <文件夹名>，例如：\n\n"
                 "    新建 资料\n\n"
+                "移 <源路径> <目标路径>，例如：\n\n"
+                "    移 test.txt 资料/备份\n"
+                "    移 资料/旧文件.txt /  (移动到根目录)\n\n"
                 "删微盘 <准确文件名>，例如：\n\n"
                 "    删微盘 test.txt\n\n"
                 "下微盘 <准确文件名>，例如：\n\n"
@@ -356,6 +360,55 @@ class WeDriveUploaderPlugin(Star):
             else:
                  yield event.plain_result(f"❌ 创建失败，请检查日志。")
             
+            event.stop_event()
+            return
+
+        # 6. 处理 "移" 指令
+        if message_str.startswith("移"):
+            args = message_str[1:].strip().split()
+            if len(args) != 2:
+                yield event.plain_result("⚠️ 指令格式错误。请使用：移 <源路径> <目标文件夹路径>，例如：移 test.txt 资料/备份")
+                event.stop_event()
+                return
+
+            src_path = args[0]
+            dst_path = args[1]
+            
+            logger.info(f"[WeDriveUploader] 尝试移动: {src_path} -> {dst_path}")
+            yield event.plain_result(f"🚚 正在解析路径并移动...")
+
+            # Resolve source
+            src_file = await self.uploader.get_file_by_path(src_path)
+            if not src_file:
+                yield event.plain_result(f"❌ 未找到源文件/文件夹 '{src_path}'。")
+                event.stop_event()
+                return
+                
+            # Resolve destination
+            # Support moving to root if dst is "/" or "."? 
+            # Assume user provides a folder name. If they want root, maybe they type "root" or "/"?
+            # For now, assume explicit path.
+            if dst_path == "/" or dst_path == ".":
+                dst_folder_id = self.uploader.space_id
+                dst_name = "根目录"
+            else:
+                dst_folder = await self.uploader.get_file_by_path(dst_path)
+                if not dst_folder:
+                    yield event.plain_result(f"❌ 未找到目标文件夹 '{dst_path}'。")
+                    event.stop_event()
+                    return
+                dst_folder_id = dst_folder.get('fileid')
+                dst_name = dst_folder.get('file_name')
+                
+                # Check if dst is actually a folder (file_type=1 is folder usually, but let API handle or check?)
+                # It's safer to try.
+            
+            success = await self.uploader.move_files([src_file['fileid']], dst_folder_id)
+            if success:
+                yield event.plain_result(f"✅ 已将 '{src_path}' 移动到 '{dst_name}'。")
+            else:
+                yield event.plain_result(f"❌ 移动失败，请检查目标是否为有效文件夹或权限问题。")
+
             event.stop_event()
             return
 

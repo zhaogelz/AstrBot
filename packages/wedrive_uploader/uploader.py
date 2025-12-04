@@ -279,14 +279,57 @@ class WeDriveUploader:
                         return None
         return None
 
-    async def list_files(self, fatherid=None):
+    async def get_file_by_path(self, path_str):
+        """
+        根据路径获取文件对象 (支持 a/b/c 格式)
+        """
+        if not path_str: return None
+        # Normalize path, split by /
+        parts = [p for p in path_str.replace('\\', '/').split('/') if p]
+        
+        # Start from root
+        current_father_id = self.space_id
+        target_item = None
+        
+        for i, part in enumerate(parts):
+            # Find 'part' in 'current_father_id'
+            found = False
+            start = 0
+            limit = 100
+            
+            # Pagination loop to find the file in the current directory
+            while True:
+                res = await self.list_files(fatherid=current_father_id, start=start, limit=limit)
+                if not res: break
+                items = res.get('item', [])
+                if not isinstance(items, list) or not items: break
+                
+                for item in items:
+                    # item['file_name'] is the name
+                    if item.get('file_name') == part:
+                        target_item = item
+                        current_father_id = item.get('fileid') # Prepare for next level
+                        found = True
+                        break
+                
+                if found: break
+                if len(items) < limit: break # No more files
+                start += limit
+            
+            if not found:
+                # Path component not found
+                return None
+        
+        return target_item
+
+    async def list_files(self, fatherid=None, start=0, limit=100):
         """
         列出微盘文件
         """
         if not fatherid:
             fatherid = self.space_id
 
-        logger.info(f"📂 正在获取微盘文件列表 (SpaceID: {self.space_id})...")
+        # logger.info(f"📂 正在获取微盘文件列表 (SpaceID: {self.space_id}, Start: {start})...")
         
         async with aiohttp.ClientSession() as session:
             for retry in range(2):
@@ -298,8 +341,8 @@ class WeDriveUploader:
                     "spaceid": self.space_id,
                     "fatherid": fatherid,
                     "sort_type": 3, # 1: name, 2: size, 3: update time
-                    "start": 0,
-                    "limit": 100
+                    "start": start,
+                    "limit": limit
                 }
                 
                 try:
@@ -307,9 +350,6 @@ class WeDriveUploader:
                         res_data = await resp.json()
                         if res_data.get("errcode") == 0:
                             # API returns {'errcode': 0, 'file_list': {'item': [...]}}
-                            # Wait, the log shows: {'item': [...]} inside `file_list` key of `res_data`?
-                            # The previous log showed: "✅ 获取成功, file_list: {'item': [...]}"
-                            # So res_data['file_list'] IS the dict {'item': [...]}.
                             return res_data.get("file_list", {})
                         elif res_data.get("errcode") in [40014, 42001, 41001]:
                             logger.warning(f"⚠️ 获取列表时Token失效，刷新重试...")
@@ -364,6 +404,42 @@ class WeDriveUploader:
                     logger.error(f"❌ 创建文件夹网络异常: {e}")
                     return None
         return None
+
+    async def move_files(self, file_ids, target_father_id):
+        """
+        移动文件
+        """
+        logger.info(f"🚚 正在移动文件 (FileIDs: {file_ids}) -> {target_father_id}...")
+        
+        async with aiohttp.ClientSession() as session:
+            for retry in range(2):
+                access_token = await self.token_mgr.get_token()
+                if not access_token: return False
+
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_move?access_token={access_token}"
+                payload = {
+                    "fatherid": target_father_id,
+                    "fileid": file_ids,
+                    "replace": False 
+                }
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        res_data = await resp.json()
+                        if res_data.get("errcode") == 0:
+                            logger.info(f"✅ 移动成功")
+                            return True
+                        elif res_data.get("errcode") in [40014, 42001, 41001]:
+                            logger.warning(f"⚠️ 移动时Token失效，刷新重试...")
+                            await self.token_mgr.get_token(force_refresh=True)
+                            continue
+                        else:
+                            logger.error(f"❌ 移动失败: {res_data}")
+                            return False
+                except Exception as e:
+                    logger.error(f"❌ 移动网络异常: {e}")
+                    return False
+        return False
 
     async def delete_file(self, file_id):
         """
