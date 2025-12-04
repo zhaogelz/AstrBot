@@ -323,6 +323,48 @@ class WeDriveUploader:
                     return None
         return None
 
+    async def create_folder(self, folder_name, fatherid=None):
+        """
+        新建微盘文件夹
+        """
+        if not fatherid:
+            fatherid = self.space_id
+
+        logger.info(f"📂 正在创建文件夹: {folder_name} (SpaceID: {self.space_id})...")
+        
+        async with aiohttp.ClientSession() as session:
+            for retry in range(2):
+                access_token = await self.token_mgr.get_token()
+                if not access_token: return None
+
+                url = f"https://qyapi.weixin.qq.com/cgi-bin/wedrive/file_create?access_token={access_token}"
+                payload = {
+                    "spaceid": self.space_id,
+                    "fatherid": fatherid,
+                    "file_type": 1,
+                    "file_name": folder_name
+                }
+                
+                try:
+                    async with session.post(url, json=payload) as resp:
+                        res_data = await resp.json()
+                        if res_data.get("errcode") == 0:
+                            # API returns {'errcode': 0, 'fileid': '...', ...}
+                            file_id = res_data.get("fileid")
+                            logger.info(f"✅ 文件夹创建成功, FileID: {file_id}")
+                            return res_data
+                        elif res_data.get("errcode") in [40014, 42001, 41001]:
+                            logger.warning(f"⚠️ 创建文件夹时Token失效，刷新重试...")
+                            await self.token_mgr.get_token(force_refresh=True)
+                            continue
+                        else:
+                            logger.error(f"❌ 创建文件夹失败: {res_data}")
+                            return None
+                except Exception as e:
+                    logger.error(f"❌ 创建文件夹网络异常: {e}")
+                    return None
+        return None
+
     async def delete_file(self, file_id):
         """
         删除微盘文件

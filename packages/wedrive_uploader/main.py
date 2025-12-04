@@ -96,6 +96,7 @@ class WeDriveUploaderPlugin(Star):
             "搜微盘": "搜微盘",
             "删微盘": "删微盘",
             "下微盘": "下微盘",
+            "新建": "新建",
             "帮助": "帮助"
         }
         
@@ -126,6 +127,8 @@ class WeDriveUploaderPlugin(Star):
                 "    查微盘\n\n"
                 "搜微盘 <关键字>，例如：\n\n"
                 "    搜微盘 es\n\n"
+                "新建 <文件夹名>，例如：\n\n"
+                "    新建 资料\n\n"
                 "删微盘 <准确文件名>，例如：\n\n"
                 "    删微盘 test.txt\n\n"
                 "下微盘 <准确文件名>，例如：\n\n"
@@ -331,6 +334,27 @@ class WeDriveUploaderPlugin(Star):
                             yield event.plain_result(f"❌ 推送异常: {e}")
                     else:
                         yield event.plain_result(f"❌ 下载失败，请检查日志。")
+            
+            event.stop_event()
+            return
+
+        # 5. 处理 "新建" 指令
+        if message_str.startswith("新建"):
+            folder_name = message_str[2:].strip()
+            if not folder_name:
+                yield event.plain_result("⚠️ 请输入要创建的文件夹名称，例如：新建 资料备份")
+                event.stop_event()
+                return
+
+            logger.info(f"[WeDriveUploader] 尝试创建文件夹: {folder_name}")
+            yield event.plain_result(f"📂 正在创建文件夹 '{folder_name}' ...")
+
+            result = await self.uploader.create_folder(folder_name)
+            
+            if result:
+                 yield event.plain_result(f"✅ 文件夹 '{folder_name}' 创建成功。")
+            else:
+                 yield event.plain_result(f"❌ 创建失败，请检查日志。")
             
             event.stop_event()
             return
