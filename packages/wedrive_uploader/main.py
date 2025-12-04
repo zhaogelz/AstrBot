@@ -89,14 +89,15 @@ class WeDriveUploaderPlugin(Star):
         
         # 简单的去 At 处理：如果消息以 @ 开头，尝试找到第一个空格并截断
         # 更加鲁棒的方式是遍历 message components，但这需要更多代码。
-        # 这里采用简单策略：如果包含 "下微盘" 等指令，直接提取指令及之后的部分
+        # 这里采用简单策略：如果包含 "下 " 等指令，直接提取指令及之后的部分
         
+        # 定义指令映射：Key 为指令触发词，Value 为内部标识
+        # 注意：为了防止误触，单字指令必须配合 "指令+空格" 的形式检测
         cmd_map = {
-            "查微盘": "查微盘",
-            "搜微盘": "搜微盘",
-            "删微盘": "删微盘",
-            "下微盘": "下微盘",
-            "新建": "新建",
+            "搜": "搜",
+            "删": "删",
+            "下": "下",
+            "建": "建",
             "移": "移",
             "帮助": "帮助"
         }
@@ -104,16 +105,40 @@ class WeDriveUploaderPlugin(Star):
         target_cmd = None
         clean_msg = message_str
         
-        for cmd in cmd_map:
-            if cmd in message_str:
-                # 找到指令起始位置
-                idx = message_str.find(cmd)
-                # 确保指令前是空格或开头 (避免匹配到 "上下微盘")
-                if idx == 0 or message_str[idx-1].isspace() or message_str[idx-1] == ']': # ] for [At:xxx]
-                    target_cmd = cmd
-                    clean_msg = message_str[idx:]
-                    break
+        # 预处理：尝试去除 At 部分（如果存在）
+        # 如果消息以 "[At:" 开头，或者以 "@" 开头，找到第一个空格或 "]" 后的内容
+        # 这是一个简化的处理，实际情况 AstrBot core 可能已经处理了 clean content，
+        # 但这里直接操作 message_str 比较稳妥。
         
+        # 实际上，我们只需要检测 message_str 是否以 "CMD " 开头
+        # 或者 "@Bot CMD "
+        
+        # 1. Check for direct match at start
+        for cmd in cmd_map:
+            # Strict rule: CMD must be followed by space, OR be the exact string (for "搜" with no args, or "帮助")
+            if message_str == cmd or message_str.startswith(cmd + " "):
+                target_cmd = cmd
+                clean_msg = message_str
+                break
+        
+        # 2. If not found, check if it's inside (e.g. after At)
+        if not target_cmd:
+             for cmd in cmd_map:
+                # Search for " CMD " or "] CMD " or "]CMD "
+                # Simplest heuristic: Find the cmd, check character before it.
+                idx = message_str.find(cmd)
+                if idx > 0:
+                    # Check char before
+                    prev_char = message_str[idx-1]
+                    # Check char after (must be space or end of string)
+                    is_end = (idx + len(cmd) == len(message_str))
+                    next_char_is_space = (not is_end) and message_str[idx+len(cmd)] == ' '
+                    
+                    if (prev_char.isspace() or prev_char == ']') and (is_end or next_char_is_space):
+                        target_cmd = cmd
+                        clean_msg = message_str[idx:]
+                        break
+
         if not target_cmd:
             # 如果没匹配到指令，再检查是否是普通文件上传消息
             pass
@@ -123,111 +148,174 @@ class WeDriveUploaderPlugin(Star):
         # 0. 处理 "帮助" 指令
         if message_str == "帮助":
             help_text = (
-                "微盘助手指令说明：\n\n"
-                "查微盘：列出微盘中所有的文件\n\n"
-                "    查微盘\n\n"
-                "搜微盘 <关键字>，例如：\n\n"
-                "    搜微盘 es\n\n"
-                "新建 <文件夹名>，例如：\n\n"
-                "    新建 资料\n\n"
+                "微盘助手指令说明 (单字指令需加空格)：\n\n"
+                "搜 [参数]：\n"
+                "  - 搜 (不加参数)：列出根目录所有文件\n"
+                "  - 搜 <文件名>：递归搜索全盘 (如: 搜 es)\n"
+                "  - 搜 <加路径>：递归搜索指定文件夹 (如: 搜 资料/es)\n\n"
+                "建 <文件夹名>，例如：\n\n"
+                "    建 资料\n\n"
                 "移 <源路径> <目标路径>，例如：\n\n"
                 "    移 test.txt 资料/备份\n"
                 "    移 资料/旧文件.txt /  (移动到根目录)\n\n"
-                "删微盘 <准确文件名>，例如：\n\n"
-                "    删微盘 test.txt\n\n"
-                "下微盘 <准确文件名>，例如：\n\n"
-                "    下微盘 test.txt"
+                "删 <准确文件名>，例如：\n\n"
+                "    删 test.txt\n\n"
+                "下 <准确文件名>，例如：\n\n"
+                "    下 test.txt"
             )
             yield event.plain_result(help_text)
             event.stop_event()
             return
 
-        # 1. 处理 "查微盘" 指令
-        if message_str == "查微盘":
-            logger.info(f"[WeDriveUploader] 收到查微盘指令")
-            yield event.plain_result(f"📂 正在获取微盘文件列表...")
+        # 1. 处理 "搜" 指令
+        if message_str == "搜" or message_str.startswith("搜 "):
+            # Handle case "搜" (no space, just cmd) -> args is empty
+            # Handle case "搜 xxx" -> args is "xxx"
+            args = message_str[1:].strip()
             
-            files = await self.uploader.list_files()
-            if files is None:
-                 yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
-            else:
-                # Extract list from response structure {'item': [...]}
-                file_list = files.get('item', []) if isinstance(files, dict) else files
-                if not isinstance(file_list, list):
-                    file_list = []
-
-                if not file_list:
-                     yield event.plain_result(f"📂 微盘目录为空。")
+            # case 1: No args -> List root files
+            if not args:
+                logger.info(f"[WeDriveUploader] 收到搜(根目录)指令")
+                yield event.plain_result(f"📂 正在获取微盘根目录文件...")
+                
+                files = await self.uploader.list_files() # Default lists root
+                if files is None:
+                     yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
                 else:
-                    # 格式化输出
-                    msg = f"📂 微盘文件列表 (共{len(file_list)}个):\n"
-                    for f in file_list:
-                        if isinstance(f, str):
-                             name = f"FileID: {f}"
-                             size_str = "未知大小"
-                        else:
+                    file_list = files.get('item', []) if isinstance(files, dict) else files
+                    if not isinstance(file_list, list): file_list = []
+
+                    if not file_list:
+                         yield event.plain_result(f"📂 微盘根目录为空。")
+                    else:
+                        msg = f"📂 根目录文件 (共{len(file_list)}个):\n"
+                        for f in file_list:
                             name = f.get("file_name", "未知文件")
                             size = int(f.get("file_size", 0))
-                            # 简单的大小转换
-                            if size < 1024:
-                                size_str = f"{size}B"
-                            elif size < 1024 * 1024:
-                                size_str = f"{size/1024:.1f}KB"
-                            else:
-                                size_str = f"{size/1024/1024:.1f}MB"
-                        msg += f"- {name} ({size_str})\n"
-                    yield event.plain_result(msg)
-            
-            # 停止事件传播，防止 AI 回复
-            event.stop_event()
-            return
-
-        # 2. 处理 "搜微盘" 指令
-        if message_str.startswith("搜微盘"):
-            keyword = message_str[3:].strip()
-            if not keyword:
-                yield event.plain_result("⚠️ 请输入要搜索的文件名，例如：搜微盘 报告")
+                            is_folder = (f.get("file_type") == 1)
+                            
+                            if size < 1024: size_str = f"{size}B"
+                            elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
+                            else: size_str = f"{size/1024/1024:.1f}MB"
+                            
+                            icon = "📁" if is_folder else "📄"
+                            msg += f"{icon} {name} ({size_str})\n"
+                        yield event.plain_result(msg)
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 搜索文件: {keyword}")
-            yield event.plain_result(f"🔍 正在搜索包含 '{keyword}' 的文件...")
-
-            files = await self.uploader.list_files()
-            if files is None:
-                 yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
-            else:
-                # Extract list
-                file_list = files.get('item', []) if isinstance(files, dict) else files
-                if not isinstance(file_list, list):
-                    file_list = []
+            # case 2: With args -> Check if it's a folder path first
+            # If args matches a folder, list its content.
+            
+            # Try exact path match first
+            matched_folder = await self.uploader.get_file_by_path(args)
+            
+            if matched_folder and matched_folder.get('file_type') == 1:
+                folder_name = matched_folder.get('file_name')
+                folder_id = matched_folder.get('fileid')
+                logger.info(f"[WeDriveUploader] 参数 '{args}' 匹配到文件夹，列出内容...")
                 
-                matched = [f for f in file_list if isinstance(f, dict) and keyword in f.get("file_name", "")]
+                yield event.plain_result(f"📂 正在列出 '{args}' 的内容...")
+                files = await self.uploader.list_files(fatherid=folder_id)
                 
-                if not matched:
-                     yield event.plain_result(f"📂 未找到包含 '{keyword}' 的文件。")
+                if files:
+                    file_list = files.get('item', [])
+                    if not file_list:
+                         yield event.plain_result(f"📂 文件夹 '{folder_name}' 为空。")
+                    else:
+                        msg = f"📂 '{folder_name}' 文件列表 (共{len(file_list)}个):\n"
+                        for f in file_list:
+                            name = f.get("file_name")
+                            size = int(f.get("file_size", 0))
+                            is_folder = (f.get("file_type") == 1)
+                            
+                            if size < 1024: size_str = f"{size}B"
+                            elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
+                            else: size_str = f"{size/1024/1024:.1f}MB"
+                            
+                            icon = "📁" if is_folder else "📄"
+                            msg += f"{icon} {name} ({size_str})\n"
+                        yield event.plain_result(msg)
                 else:
-                    msg = f"🔍 搜索结果 (共{len(matched)}个):\n"
-                    for f in matched:
-                        name = f.get("file_name", "未知文件")
-                        size = int(f.get("file_size", 0))
-                        if size < 1024:
-                            size_str = f"{size}B"
-                        elif size < 1024 * 1024:
-                            size_str = f"{size/1024:.1f}KB"
-                        else:
-                            size_str = f"{size/1024/1024:.1f}MB"
-                        msg += f"- {name} ({size_str})\n"
-                    yield event.plain_result(msg)
+                    yield event.plain_result(f"❌ 获取失败或文件夹为空。")
+                
+                event.stop_event()
+                return
+
+            # If not a folder, proceed to recursive search
+            keyword = args
+            start_node_id = None
+            start_path_str = ""
+            
+            # Check if it's a path search: "Folder/Keyword"
+            # Note: If "A/B" was a folder, it would have been caught above.
+            # So if we are here, "A/B" is NOT a folder.
+            # It could be "Folder/Keyword" where Folder exists but Keyword is just a string.
+            
+            if "/" in keyword:
+                # Split by last slash
+                path_part, key_part = keyword.rsplit('/', 1)
+                
+                # If keyword ends with /, e.g. "A/B/", and it wasn't caught above as a folder,
+                # then "A/B" likely doesn't exist as a folder.
+                
+                if not key_part: # "A/B/"
+                     # This means get_file_by_path("A/B") failed (returned None or not folder).
+                     yield event.plain_result(f"❌ 未找到指定文件夹: {path_part}")
+                     event.stop_event()
+                     return
+                
+                logger.info(f"[WeDriveUploader] 正在解析搜索路径: {path_part}")
+                folder = await self.uploader.get_file_by_path(path_part)
+                
+                if not folder:
+                    yield event.plain_result(f"❌ 未找到指定搜索目录: {path_part}")
+                    event.stop_event()
+                    return
+                
+                if folder.get('file_type') != 1:
+                     yield event.plain_result(f"❌ 路径 '{path_part}' 不是一个文件夹。")
+                     event.stop_event()
+                     return
+
+                start_node_id = folder.get('fileid')
+                start_path_str = path_part
+                keyword = key_part # Update keyword to search
+            
+            # Do recursive search
+            # If keyword is empty here, it means user typed "Folder/" but "Folder" logic handled it?
+            # No, if "Folder/" and "Folder" exists, it's caught by get_file_by_path("Folder") logic above.
+            # So we shouldn't reach here with empty keyword usually.
+            
+            target_scope = start_path_str if start_path_str else "根目录"
+            yield event.plain_result(f"🔍 正在 '{target_scope}' 下递归搜索 '{keyword}' ...")
+            
+            results = await self.uploader.recursive_search(keyword, start_father_id=start_node_id, start_path=start_path_str)
+            
+            if not results:
+                yield event.plain_result(f"📂 未找到包含 '{keyword}' 的文件。")
+            else:
+                msg = f"🔍 搜索结果 (共{len(results)}个):\n"
+                for res in results:
+                    # res: {name, path, size, is_folder}
+                    icon = "📁" if res['is_folder'] else "📄"
+                    path = res['path']
+                    size = res['size']
+                    if size < 1024: size_str = f"{size}B"
+                    elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
+                    else: size_str = f"{size/1024/1024:.1f}MB"
+                    
+                    msg += f"{icon} {path} ({size_str})\n"
+                yield event.plain_result(msg)
             
             event.stop_event()
             return
 
-        # 3. 处理 "删微盘" 指令
-        if message_str.startswith("删微盘"):
-            filename = message_str[3:].strip()
+        # 3. 处理 "删" 指令
+        if message_str.startswith("删 "):
+            filename = message_str[1:].strip()
             if not filename:
-                yield event.plain_result("⚠️ 请输入要删除的准确文件名，例如：删微盘 test.txt")
+                yield event.plain_result("⚠️ 请输入要删除的准确文件名，例如：删 test.txt")
                 event.stop_event()
                 return
 
@@ -262,11 +350,11 @@ class WeDriveUploaderPlugin(Star):
             event.stop_event()
             return
 
-        # 4. 处理 "下微盘" 指令
-        if message_str.startswith("下微盘"):
-            filename = message_str[3:].strip()
+        # 4. 处理 "下" 指令
+        if message_str.startswith("下 "):
+            filename = message_str[1:].strip()
             if not filename:
-                yield event.plain_result("⚠️ 请输入要下载的准确文件名，例如：下微盘 test.txt")
+                yield event.plain_result("⚠️ 请输入要下载的准确文件名，例如：下 test.txt")
                 event.stop_event()
                 return
 
@@ -342,11 +430,11 @@ class WeDriveUploaderPlugin(Star):
             event.stop_event()
             return
 
-        # 5. 处理 "新建" 指令
-        if message_str.startswith("新建"):
-            folder_name = message_str[2:].strip()
+        # 5. 处理 "建" 指令
+        if message_str.startswith("建 "):
+            folder_name = message_str[1:].strip()
             if not folder_name:
-                yield event.plain_result("⚠️ 请输入要创建的文件夹名称，例如：新建 资料备份")
+                yield event.plain_result("⚠️ 请输入要创建的文件夹名称，例如：建 资料备份")
                 event.stop_event()
                 return
 

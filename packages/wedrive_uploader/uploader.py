@@ -279,6 +279,69 @@ class WeDriveUploader:
                         return None
         return None
 
+    async def recursive_search(self, keyword, start_father_id=None, start_path=""):
+        """
+        递归搜索文件
+        """
+        if not start_father_id:
+            start_father_id = self.space_id
+            
+        results = []
+        # Queue for BFS: (father_id, current_path_str)
+        queue = [(start_father_id, start_path)]
+        
+        # Limit to prevent excessively long searches
+        max_requests = 100 
+        request_count = 0
+        
+        while queue and request_count < max_requests:
+            curr_id, curr_path = queue.pop(0)
+            
+            start = 0
+            limit = 100
+            
+            while True:
+                # Small delay to be nice to the API
+                if request_count > 0 and request_count % 10 == 0:
+                    await asyncio.sleep(0.5)
+
+                request_count += 1
+                # We use list_files to get content of current folder
+                # NOTE: list_files returns the 'file_list' object (which contains 'item' list)
+                file_list_obj = await self.list_files(fatherid=curr_id, start=start, limit=limit)
+                
+                if not file_list_obj: break
+                
+                items = file_list_obj.get('item', [])
+                if not isinstance(items, list): items = []
+                
+                for item in items:
+                    f_name = item.get('file_name', '')
+                    # file_type: 1=folder, 3=doc, 4=sheet, etc.
+                    f_type = item.get('file_type') 
+                    
+                    item_path = (curr_path + "/" + f_name) if curr_path else f_name
+                    
+                    # Check match (case insensitive?) Let's do case insensitive
+                    if keyword.lower() in f_name.lower():
+                        results.append({
+                            'name': f_name,
+                            'path': item_path,
+                            'size': item.get('file_size', 0),
+                            'is_folder': (f_type == 1),
+                            'fileid': item.get('fileid')
+                        })
+                    
+                    # If folder, add to queue to traverse deeper
+                    if f_type == 1: 
+                        queue.append((item.get('fileid'), item_path))
+                
+                if len(items) < limit:
+                    break
+                start += limit
+                
+        return results
+
     async def get_file_by_path(self, path_str):
         """
         根据路径获取文件对象 (支持 a/b/c 格式)
