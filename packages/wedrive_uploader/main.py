@@ -182,16 +182,16 @@ class WeDriveUploaderPlugin(Star):
                 "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜 资料)\n\n"
                 "下 <路径>\n"
                 "  - 下载根目录文件 (如: 下 test.txt)\n"
-                "  - 下载指定路径文件 (如: 下 资料/报告.pdf)\n\n"
-                "删 <路径>\n"
-                "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
-                "  - 第一次删除示例：删 测试/test.txt\n\n"
-                "  - 第二次删除示例：删 回收站/test.txt\n\n"
+                "  - 下载指定路径文件 (如: 下 资料/报告.pdf)\n\n"               
                 "建 <路径>\n"
                 "  - 递归创建文件夹 (如: 建 资料/2025/备份)\n\n"
                 "移 <源路径> <目标路径>\n"
                 "  - 移动文件或文件夹 (如: 移 test.txt 资料/备份)\n"
                 "  - 移动到根目录使用 / (如: 移 资料/旧文件.txt /)"
+                "删 <路径>\n"
+                "  *(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)*：\n"
+                "  - 第一次删除示例：删 测试/test.txt\n\n"
+                "  - 第二次删除示例：删 回收站/test.txt\n\n"
             )
             yield event.plain_result(help_text)
             event.stop_event()
@@ -229,7 +229,7 @@ class WeDriveUploaderPlugin(Star):
                             else: size_str = f"{size/1024/1024:.1f}MB"
                             
                             icon = "📁" if is_folder else "📄"
-                            msg += f"{icon} {name} ({size_str})\n"
+                            msg += f"{icon} {name} ({size_str})\n\n"
                         yield event.plain_result(msg)
                 event.stop_event()
                 return
@@ -264,7 +264,7 @@ class WeDriveUploaderPlugin(Star):
                             else: size_str = f"{size/1024/1024:.1f}MB"
                             
                             icon = "📁" if is_folder else "📄"
-                            msg += f"{icon} {name} ({size_str})\n"
+                            msg += f"{icon} {name} ({size_str})\n\n"
                         yield event.plain_result(msg)
                 else:
                     yield event.plain_result(f"❌ 获取失败或文件夹为空。")
@@ -335,7 +335,7 @@ class WeDriveUploaderPlugin(Star):
                     elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
                     else: size_str = f"{size/1024/1024:.1f}MB"
                     
-                    msg += f"{icon} {path} ({size_str})\n"
+                    msg += f"{icon} {path} ({size_str})\n\n"
                 yield event.plain_result(msg)
             
             event.stop_event()
