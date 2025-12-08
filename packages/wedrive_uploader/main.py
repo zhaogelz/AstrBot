@@ -210,55 +210,78 @@ class WeDriveUploaderPlugin(Star):
                     file_list = files.get('item', []) if isinstance(files, dict) else files
                     if not isinstance(file_list, list): file_list = []
 
-            # case 2: With args -> Check if it's a folder path first
+            # case 2: With args
             else:
-                # Try exact path match first
-                matched_folder = await self.uploader.get_file_by_path(args)
+                # Check if args is a digit (index search)
+                cached_file = self._get_cached_file(session_id, args)
                 
-                if matched_folder and matched_folder.get('file_type') == 1:
-                    folder_name = matched_folder.get('file_name')
-                    folder_id = matched_folder.get('fileid')
-                    logger.info(f"[WeDriveUploader] 参数 '{args}' 匹配到文件夹，列出内容...")
+                if cached_file:
+                    # Index search logic
+                    logger.info(f"[WeDriveUploader] 使用缓存文件(序号{args}): {cached_file.get('file_name', cached_file.get('name'))}")
                     
-                    yield event.plain_result(f"📂 正在列出 '{args}' 的内容...")
-                    files = await self.uploader.list_files(fatherid=folder_id)
+                    is_folder = (cached_file.get("file_type") == 1) or cached_file.get("is_folder", False)
+                    name = cached_file.get('file_name', cached_file.get('name', '未知'))
                     
-                    if files:
-                        file_list = files.get('item', [])
+                    if is_folder:
+                        folder_id = cached_file.get('fileid')
+                        yield event.plain_result(f"📂 正在列出 '{name}' 的内容...")
+                        files = await self.uploader.list_files(fatherid=folder_id)
+                        if files:
+                            file_list = files.get('item', [])
+                    else:
+                        yield event.plain_result(f"❌ '{name}' 是一个文件，无法进入搜索。\n💡 提示：可使用 '下{args}' 下载，或 '删{args}' 删除。")
+                        event.stop_event()
+                        return
                 
-                # If not a folder match, assume keyword search
-                elif not matched_folder:
-                    keyword = args
-                    start_node_id = None
-                    start_path_str = ""
+                # Path/Keyword search logic (fallback if not digit or not in cache, actually if digit but not in cache _get_cached_file returns None)
+                # Note: If user types "1" but cache is empty, _get_cached_file returns None.
+                # In that case, should we try to search for file named "1"?
+                # The previous logic would treat "1" as a path/keyword. 
+                # Let's keep that behavior: if not found in cache (or not digit), treat as path/keyword.
+                else:
+                    # Try exact path match first
+                    matched_folder = await self.uploader.get_file_by_path(args)
                     
-                    if "/" in keyword:
-                        path_part, key_part = keyword.rsplit('/', 1)
-                        if not key_part: # "A/B/"
-                             yield event.plain_result(f"❌ 未找到指定文件夹: {path_part}")
-                             event.stop_event()
-                             return
+                    if matched_folder and matched_folder.get('file_type') == 1:
+                        folder_name = matched_folder.get('file_name')
+                        folder_id = matched_folder.get('fileid')
+                        logger.info(f"[WeDriveUploader] 参数 '{args}' 匹配到文件夹，列出内容...")
                         
-                        logger.info(f"[WeDriveUploader] 正在解析搜索路径: {path_part}")
-                        folder = await self.uploader.get_file_by_path(path_part)
+                        yield event.plain_result(f"📂 正在列出 '{args}' 的内容...")
+                        files = await self.uploader.list_files(fatherid=folder_id)
                         
-                        if not folder or folder.get('file_type') != 1:
-                            # Not found or not folder, let's just proceed as keyword? 
-                            # Or fail? The original logic was to fail or try to search inside.
-                            # But if "A/B" failed, maybe "A" exists and we search "B" in "A"?
-                            # For simplicity, stick to original logic: if path specified, it must exist.
-                            yield event.plain_result(f"❌ 未找到指定搜索目录: {path_part}")
-                            event.stop_event()
-                            return
+                        if files:
+                            file_list = files.get('item', [])
+                    
+                    # If not a folder match, assume keyword search
+                    elif not matched_folder:
+                        keyword = args
+                        start_node_id = None
+                        start_path_str = ""
+                        
+                        if "/" in keyword:
+                            path_part, key_part = keyword.rsplit('/', 1)
+                            if not key_part: # "A/B/"
+                                 yield event.plain_result(f"❌ 未找到指定文件夹: {path_part}")
+                                 event.stop_event()
+                                 return
+                            
+                            logger.info(f"[WeDriveUploader] 正在解析搜索路径: {path_part}")
+                            folder = await self.uploader.get_file_by_path(path_part)
+                            
+                            if not folder or folder.get('file_type') != 1:
+                                yield event.plain_result(f"❌ 未找到指定搜索目录: {path_part}")
+                                event.stop_event()
+                                return
 
-                        start_node_id = folder.get('fileid')
-                        start_path_str = path_part
-                        keyword = key_part
-                    
-                    target_scope = start_path_str if start_path_str else "根目录"
-                    yield event.plain_result(f"🔍 正在 '{target_scope}' 下递归搜索 '{keyword}' ...")
-                    
-                    file_list = await self.uploader.recursive_search(keyword, start_father_id=start_node_id, start_path=start_path_str)
+                            start_node_id = folder.get('fileid')
+                            start_path_str = path_part
+                            keyword = key_part
+                        
+                        target_scope = start_path_str if start_path_str else "根目录"
+                        yield event.plain_result(f"🔍 正在 '{target_scope}' 下递归搜索 '{keyword}' ...")
+                        
+                        file_list = await self.uploader.recursive_search(keyword, start_father_id=start_node_id, start_path=start_path_str)
 
             # --- Display Results and Cache ---
             if not file_list:
@@ -268,7 +291,7 @@ class WeDriveUploaderPlugin(Star):
                 # Store in cache
                 self.search_cache[session_id] = file_list
                 
-                msg = f"📂 搜索结果 (共{len(file_list)}个):\n\n"
+                msg = f"📂 搜索结果 (共{len(file_list)}个):\n"
                 for i, f in enumerate(file_list):
                     name = f.get("file_name", f.get("name", "未知文件")) # recursive_search returns 'name', list_files returns 'file_name'
                     size = int(f.get("file_size", f.get("size", 0)))
@@ -281,7 +304,7 @@ class WeDriveUploaderPlugin(Star):
                     icon = "📁" if is_folder else "📄"
                     msg += f"[{i+1}] {icon} {name} ({size_str})\n\n"
                 
-                msg += "\n💡 提示：可使用序号操作，如 '下1', '删2', '移1 资料'"
+                msg += "\n💡 提示：可使用序号操作，如 '搜1' (进入), '下1', '删2', '移1 资料'"
                 yield event.plain_result(msg)
             
             event.stop_event()
