@@ -20,6 +20,7 @@ class WeDriveUploaderPlugin(Star):
         self.config = self._load_config()
         self.recycle_bin_id = None
         self.init_lock = asyncio.Lock()
+        self.search_cache = {} # Key: session_id, Value: list of file objects
         
         if not self.config:
             logger.warning("[WeDriveUploader] 未配置 corpid/secret，插件无法工作。请修改 data/config/wedrive_uploader.json")
@@ -104,22 +105,28 @@ class WeDriveUploaderPlugin(Star):
             logger.error(f"[WeDriveUploader] 读取配置文件失败: {e}")
             return None
 
+    def _get_cached_file(self, session_id, index_str):
+        """Helper to get file from cache by index string"""
+        if not index_str.isdigit():
+            return None
+        
+        index = int(index_str)
+        cache = self.search_cache.get(session_id)
+        if not cache:
+            return None
+            
+        # User index starts at 1
+        if 1 <= index <= len(cache):
+            return cache[index-1]
+        return None
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，筛选文件进行上传"""
         if not self.uploader:
             return
 
-        # 预处理消息：移除可能的 At 前缀
-        # event.message_str 可能会包含 "@机器人名称 "
         message_str = event.message_str.strip()
-        
-        # 简单的去 At 处理：如果消息以 @ 开头，尝试找到第一个空格并截断
-        # 更加鲁棒的方式是遍历 message components，但这需要更多代码。
-        # 这里采用简单策略：如果包含 "下 " 等指令，直接提取指令及之后的部分
-        
-        # 定义指令映射：Key 为指令触发词，Value 为内部标识
-        # 注意：为了防止误触，单字指令必须配合 "指令+空格" 的形式检测
         cmd_map = {
             "搜": "搜",
             "删": "删",
@@ -131,14 +138,6 @@ class WeDriveUploaderPlugin(Star):
         
         target_cmd = None
         clean_msg = message_str
-        
-        # 预处理：尝试去除 At 部分（如果存在）
-        # 如果消息以 "[At:" 开头，或者以 "@" 开头，找到第一个空格或 "]" 后的内容
-        # 这是一个简化的处理，实际情况 AstrBot core 可能已经处理了 clean content，
-        # 但这里直接操作 message_str 比较稳妥。
-        
-        # 实际上，我们只需要检测 message_str 是否以 "CMD " 开头
-        # 或者 "@Bot CMD "
         
         # 1. Check for direct match at start
         for cmd in cmd_map:
@@ -154,19 +153,18 @@ class WeDriveUploaderPlugin(Star):
                 # Search for " CMD" or "]CMD" (looser check)
                 idx = message_str.find(cmd)
                 if idx > 0:
-                    # Check char before
                     prev_char = message_str[idx-1]
-                    # We accept if previous char is space or ']'
                     if prev_char.isspace() or prev_char == ']':
                         target_cmd = cmd
                         clean_msg = message_str[idx:]
                         break
 
         if not target_cmd:
-            # 如果没匹配到指令，再检查是否是普通文件上传消息
             pass
         else:
             message_str = clean_msg
+
+        session_id = event.session_id
 
         # 0. 处理 "帮助" 指令
         if message_str.startswith("帮助"):
@@ -176,18 +174,18 @@ class WeDriveUploaderPlugin(Star):
                 "  - 不加参数：列出根目录所有文件\n"
                 "  - 加文件名：递归搜索全盘 (如: 搜es)\n"
                 "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜资料)\n\n"
-                "下<路径>\n"
-                "  - 下载根目录文件 (如: 下test.txt)\n"
+                "下<序号/路径>\n"
+                "  - 下载指定序号文件 (如: 下1)\n"
                 "  - 下载指定路径文件 (如: 下资料/报告.pdf)\n\n"               
                 "建<路径>\n"
                 "  - 递归创建文件夹 (如: 建资料/2025/备份)\n\n"
-                "移<源路径> <目标路径>\n"
-                "  - 移动文件或文件夹 (如: 移test.txt 资料/备份)\n"
+                "移<序号/源路径> <目标路径>\n"
+                "  - 移动文件或文件夹 (如: 移1 资料/备份)\n"
                 "  - 移动到根目录使用 / (如: 移资料/旧文件.txt /)\n\n"
-                "删<路径>\n\n"
+                "删<序号/路径>\n\n"
                 "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
+                "  - 删除序号1的文件：删1\n"
                 "  - 第一次删除示例：删测试/test.txt\n\n"
-                "  - 第二次删除示例：删回收站/test.txt\n\n"
             )
             yield event.plain_result(help_text)
             event.stop_event()
@@ -195,8 +193,8 @@ class WeDriveUploaderPlugin(Star):
 
         # 1. 处理 "搜" 指令
         if message_str.startswith("搜"):
-            # Handle case "搜" (no args) or "搜xxx"
             args = message_str[1:].strip()
+            file_list = []
             
             # case 1: No args -> List root files
             if not args:
@@ -206,131 +204,84 @@ class WeDriveUploaderPlugin(Star):
                 files = await self.uploader.list_files() # Default lists root
                 if files is None:
                      yield event.plain_result(f"❌ 获取文件列表失败，请检查日志。")
+                     event.stop_event()
+                     return
                 else:
                     file_list = files.get('item', []) if isinstance(files, dict) else files
                     if not isinstance(file_list, list): file_list = []
 
-                    if not file_list:
-                         yield event.plain_result(f"📂 微盘根目录为空。")
-                    else:
-                        msg = f"📂 根目录文件 (共{len(file_list)}个):\n"
-                        for f in file_list:
-                            name = f.get("file_name", "未知文件")
-                            size = int(f.get("file_size", 0))
-                            is_folder = (f.get("file_type") == 1)
-                            
-                            if size < 1024: size_str = f"{size}B"
-                            elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
-                            else: size_str = f"{size/1024/1024:.1f}MB"
-                            
-                            icon = "📁" if is_folder else "📄"
-                            msg += f"{icon} {name} ({size_str})\n\n"
-                        yield event.plain_result(msg)
-                event.stop_event()
-                return
-
             # case 2: With args -> Check if it's a folder path first
-            # If args matches a folder, list its content.
-            
-            # Try exact path match first
-            matched_folder = await self.uploader.get_file_by_path(args)
-            
-            if matched_folder and matched_folder.get('file_type') == 1:
-                folder_name = matched_folder.get('file_name')
-                folder_id = matched_folder.get('fileid')
-                logger.info(f"[WeDriveUploader] 参数 '{args}' 匹配到文件夹，列出内容...")
-                
-                yield event.plain_result(f"📂 正在列出 '{args}' 的内容...")
-                files = await self.uploader.list_files(fatherid=folder_id)
-                
-                if files:
-                    file_list = files.get('item', [])
-                    if not file_list:
-                         yield event.plain_result(f"📂 文件夹 '{folder_name}' 为空。")
-                    else:
-                        msg = f"📂 '{folder_name}' 文件列表 (共{len(file_list)}个):\n"
-                        for f in file_list:
-                            name = f.get("file_name")
-                            size = int(f.get("file_size", 0))
-                            is_folder = (f.get("file_type") == 1)
-                            
-                            if size < 1024: size_str = f"{size}B"
-                            elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
-                            else: size_str = f"{size/1024/1024:.1f}MB"
-                            
-                            icon = "📁" if is_folder else "📄"
-                            msg += f"{icon} {name} ({size_str})\n\n"
-                        yield event.plain_result(msg)
-                else:
-                    yield event.plain_result(f"❌ 获取失败或文件夹为空。")
-                
-                event.stop_event()
-                return
-
-            # If not a folder, proceed to recursive search
-            keyword = args
-            start_node_id = None
-            start_path_str = ""
-            
-            # Check if it's a path search: "Folder/Keyword"
-            # Note: If "A/B" was a folder, it would have been caught above.
-            # So if we are here, "A/B" is NOT a folder.
-            # It could be "Folder/Keyword" where Folder exists but Keyword is just a string.
-            
-            if "/" in keyword:
-                # Split by last slash
-                path_part, key_part = keyword.rsplit('/', 1)
-                
-                # If keyword ends with /, e.g. "A/B/", and it wasn't caught above as a folder,
-                # then "A/B" likely doesn't exist as a folder.
-                
-                if not key_part: # "A/B/"
-                     # This means get_file_by_path("A/B") failed (returned None or not folder).
-                     yield event.plain_result(f"❌ 未找到指定文件夹: {path_part}")
-                     event.stop_event()
-                     return
-                
-                logger.info(f"[WeDriveUploader] 正在解析搜索路径: {path_part}")
-                folder = await self.uploader.get_file_by_path(path_part)
-                
-                if not folder:
-                    yield event.plain_result(f"❌ 未找到指定搜索目录: {path_part}")
-                    event.stop_event()
-                    return
-                
-                if folder.get('file_type') != 1:
-                     yield event.plain_result(f"❌ 路径 '{path_part}' 不是一个文件夹。")
-                     event.stop_event()
-                     return
-
-                start_node_id = folder.get('fileid')
-                start_path_str = path_part
-                keyword = key_part # Update keyword to search
-            
-            # Do recursive search
-            # If keyword is empty here, it means user typed "Folder/" but "Folder" logic handled it?
-            # No, if "Folder/" and "Folder" exists, it's caught by get_file_by_path("Folder") logic above.
-            # So we shouldn't reach here with empty keyword usually.
-            
-            target_scope = start_path_str if start_path_str else "根目录"
-            yield event.plain_result(f"🔍 正在 '{target_scope}' 下递归搜索 '{keyword}' ...")
-            
-            results = await self.uploader.recursive_search(keyword, start_father_id=start_node_id, start_path=start_path_str)
-            
-            if not results:
-                yield event.plain_result(f"📂 未找到包含 '{keyword}' 的文件。")
             else:
-                msg = f"🔍 搜索结果 (共{len(results)}个):\n"
-                for res in results:
-                    # res: {name, path, size, is_folder}
-                    icon = "📁" if res['is_folder'] else "📄"
-                    path = res['path']
-                    size = res['size']
+                # Try exact path match first
+                matched_folder = await self.uploader.get_file_by_path(args)
+                
+                if matched_folder and matched_folder.get('file_type') == 1:
+                    folder_name = matched_folder.get('file_name')
+                    folder_id = matched_folder.get('fileid')
+                    logger.info(f"[WeDriveUploader] 参数 '{args}' 匹配到文件夹，列出内容...")
+                    
+                    yield event.plain_result(f"📂 正在列出 '{args}' 的内容...")
+                    files = await self.uploader.list_files(fatherid=folder_id)
+                    
+                    if files:
+                        file_list = files.get('item', [])
+                
+                # If not a folder match, assume keyword search
+                elif not matched_folder:
+                    keyword = args
+                    start_node_id = None
+                    start_path_str = ""
+                    
+                    if "/" in keyword:
+                        path_part, key_part = keyword.rsplit('/', 1)
+                        if not key_part: # "A/B/"
+                             yield event.plain_result(f"❌ 未找到指定文件夹: {path_part}")
+                             event.stop_event()
+                             return
+                        
+                        logger.info(f"[WeDriveUploader] 正在解析搜索路径: {path_part}")
+                        folder = await self.uploader.get_file_by_path(path_part)
+                        
+                        if not folder or folder.get('file_type') != 1:
+                            # Not found or not folder, let's just proceed as keyword? 
+                            # Or fail? The original logic was to fail or try to search inside.
+                            # But if "A/B" failed, maybe "A" exists and we search "B" in "A"?
+                            # For simplicity, stick to original logic: if path specified, it must exist.
+                            yield event.plain_result(f"❌ 未找到指定搜索目录: {path_part}")
+                            event.stop_event()
+                            return
+
+                        start_node_id = folder.get('fileid')
+                        start_path_str = path_part
+                        keyword = key_part
+                    
+                    target_scope = start_path_str if start_path_str else "根目录"
+                    yield event.plain_result(f"🔍 正在 '{target_scope}' 下递归搜索 '{keyword}' ...")
+                    
+                    file_list = await self.uploader.recursive_search(keyword, start_father_id=start_node_id, start_path=start_path_str)
+
+            # --- Display Results and Cache ---
+            if not file_list:
+                yield event.plain_result(f"📂 未找到文件。")
+                self.search_cache[session_id] = []
+            else:
+                # Store in cache
+                self.search_cache[session_id] = file_list
+                
+                msg = f"📂 搜索结果 (共{len(file_list)}个):\n\n"
+                for i, f in enumerate(file_list):
+                    name = f.get("file_name", f.get("name", "未知文件")) # recursive_search returns 'name', list_files returns 'file_name'
+                    size = int(f.get("file_size", f.get("size", 0)))
+                    is_folder = (f.get("file_type") == 1) or f.get("is_folder", False)
+                    
                     if size < 1024: size_str = f"{size}B"
                     elif size < 1024 * 1024: size_str = f"{size/1024:.1f}KB"
                     else: size_str = f"{size/1024/1024:.1f}MB"
                     
-                    msg += f"{icon} {path} ({size_str})\n\n"
+                    icon = "📁" if is_folder else "📄"
+                    msg += f"[{i+1}] {icon} {name} ({size_str})\n\n"
+                
+                msg += "\n💡 提示：可使用序号操作，如 '下1', '删2', '移1 资料'"
                 yield event.plain_result(msg)
             
             event.stop_event()
@@ -338,94 +289,135 @@ class WeDriveUploaderPlugin(Star):
 
         # 3. 处理 "删" 指令
         if message_str.startswith("删"):
-            # --- Start: Recycle bin and Admin check ---
             if self.uploader is None:
-                yield event.plain_result(f"❌ 微盘服务未初始化，请检查配置。")
+                yield event.plain_result(f"❌ 微盘服务未初始化。")
                 event.stop_event()
                 return
 
-            # Init recycle bin if not already
             if self.recycle_bin_id is None:
                 if not await self._init_recycle_bin():
-                    yield event.plain_result(f"❌ 回收站初始化失败，无法执行删除操作。")
+                    yield event.plain_result(f"❌ 回收站初始化失败。")
                     event.stop_event()
                     return
 
-            # Admin check
             admins = self.config.get("admins", [])
-            sender_id = event.message_obj.sender.user_id # Assuming user_id is reliable and unique
+            sender_id = event.message_obj.sender.user_id 
             if sender_id not in admins:
-                yield event.plain_result(f"❌ 权限不足：您 ({sender_id}) 没有删除操作的权限。请联系管理员添加您的 UserID。")
-                event.stop_event()
-                return
-            # --- End: Recycle bin and Admin check ---
-
-            path_str = message_str[1:].strip()
-            if not path_str:
-                yield event.plain_result("⚠️ 请输入要删除的文件或文件夹路径，例如：删test.txt")
+                yield event.plain_result(f"❌ 权限不足。")
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 尝试删除: {path_str}")
-            yield event.plain_result(f"🗑️ 正在查找并处理 '{path_str}' ...")
+            arg_str = message_str[1:].strip()
+            if not arg_str:
+                yield event.plain_result("⚠️ 请输入序号或路径，例如：删1 或 删test.txt")
+                event.stop_event()
+                return
 
-            # Use get_file_by_path to resolve the file/folder
-            target_file_obj = await self.uploader.get_file_by_path(path_str)
+            target_file_obj = None
+            cached_file = self._get_cached_file(session_id, arg_str)
             
+            if cached_file:
+                logger.info(f"[WeDriveUploader] 使用缓存文件(序号{arg_str}): {cached_file.get('file_name', cached_file.get('name'))}")
+                target_file_obj = cached_file
+                # Normalize key names if needed (recursive_search uses 'name', 'path', others use 'file_name')
+                if 'file_name' not in target_file_obj and 'name' in target_file_obj:
+                    target_file_obj['file_name'] = target_file_obj['name']
+                # Ensure fileid is present
+                if 'fileid' not in target_file_obj:
+                     yield event.plain_result(f"❌ 缓存文件信息缺失，请重新搜索。")
+                     event.stop_event()
+                     return
+                
+                # Need to find fatherid to check recycle bin status?
+                # recursive_search items don't strictly have 'fatherid'.
+                # list_files items might not either unless we check structure.
+                # However, delete logic checks parent to see if it's in recycle bin.
+                # If we don't have fatherid, we might need to fetch info? 
+                # Or just try to delete. 'delete_file' works by fileid. 
+                # The recycle bin logic in original code depended on 'fatherid'.
+                
+                # Optimization: If cached obj is from recursive search, we might know path but not fatherid directly.
+                # Let's try to fetch full info if fatherid is missing, or rely on move logic.
+                
+                if 'fatherid' not in target_file_obj:
+                     # Try to resolve by path if available to get full metadata?
+                     # Actually, for delete logic:
+                     # 1. Check if current parent is recycle bin -> Permanent Delete
+                     # 2. Else -> Move to recycle bin
+                     
+                     # Since we don't know parent ID easily from search result (unless we query),
+                     # we can check if the file's path starts with "回收站/"?
+                     path_val = target_file_obj.get('path', target_file_obj.get('file_name'))
+                     # If from list_files(root), path is just name.
+                     # If from recursive_search, path is full path.
+                     
+                     if path_val.startswith("回收站/") or path_val == "回收站":
+                         # It is in recycle bin
+                         # Mock fatherid
+                         target_file_obj['fatherid'] = self.recycle_bin_id
+                     else:
+                         # Assume not in recycle bin
+                         target_file_obj['fatherid'] = "unknown"
+
+            else:
+                # Path based lookup
+                yield event.plain_result(f"🗑️ 正在查找并处理 '{arg_str}' ...")
+                target_file_obj = await self.uploader.get_file_by_path(arg_str)
+
             if not target_file_obj:
-                 yield event.plain_result(f"❌ 未找到路径 '{path_str}'。请确认路径是否正确。")
+                 yield event.plain_result(f"❌ 未找到文件/路径 '{arg_str}'。")
                  event.stop_event()
                  return
             
             file_id_to_delete = target_file_obj.get("fileid")
-            file_name_to_delete = target_file_obj.get("file_name")
+            file_name_to_delete = target_file_obj.get("file_name", target_file_obj.get("name"))
             
             # Check if target is already in recycle bin
-            # path_str might be "回收站/somefile.txt"
-            # target_file_obj contains "fileid", "fatherid"
-            
-            # We need to get the path to the current target_file_obj.
-            # Get parent folder's ID
             target_parent_id = target_file_obj.get('fatherid')
             
-            # Compare with self.recycle_bin_id
             if target_parent_id == self.recycle_bin_id:
-                # File is already in recycle bin, perform permanent delete
-                logger.info(f"🗑️ 路径 '{path_str}' 已在回收站中，执行永久删除。")
+                logger.info(f"🗑️ 文件 '{file_name_to_delete}' 在回收站中，永久删除。")
                 if await self.uploader.delete_file(file_id_to_delete):
                     yield event.plain_result(f"✅ 已从回收站中永久删除 '{file_name_to_delete}'。")
                 else:
-                    yield event.plain_result(f"❌ 永久删除失败，请检查日志。")
+                    yield event.plain_result(f"❌ 永久删除失败。")
             else:
-                # File is not in recycle bin, move to recycle bin
-                logger.info(f"🗑️ 路径 '{path_str}' 不在回收站中，移动到回收站。")
+                logger.info(f"🗑️ 文件 '{file_name_to_delete}' 移入回收站。")
                 if await self.uploader.move_files([file_id_to_delete], self.recycle_bin_id):
                     yield event.plain_result(f"✅ 已将 '{file_name_to_delete}' 移动到回收站。")
                 else:
-                    yield event.plain_result(f"❌ 移动到回收站失败，请检查日志。")
+                    yield event.plain_result(f"❌ 移动到回收站失败。")
             
             event.stop_event()
             return
 
         # 4. 处理 "下" 指令
         if message_str.startswith("下"):
-            path_str = message_str[1:].strip()
-            if not path_str:
-                yield event.plain_result("⚠️ 请输入要下载的文件路径，例如：下资料/test.txt")
+            arg_str = message_str[1:].strip()
+            if not arg_str:
+                yield event.plain_result("⚠️ 请输入序号或文件路径，例如：下1")
                 event.stop_event()
                 return
 
-            logger.info(f"[WeDriveUploader] 尝试下载文件: {path_str}")
-            yield event.plain_result(f"🔍 正在查找文件 '{path_str}' ...")
-
-            target_file = await self.uploader.get_file_by_path(path_str)
+            target_file = None
+            cached_file = self._get_cached_file(session_id, arg_str)
+            
+            if cached_file:
+                logger.info(f"[WeDriveUploader] 使用缓存文件(序号{arg_str}): {cached_file.get('file_name', cached_file.get('name'))}")
+                target_file = cached_file
+                if 'file_name' not in target_file and 'name' in target_file:
+                    target_file['file_name'] = target_file['name']
+            else:
+                yield event.plain_result(f"🔍 正在查找文件 '{arg_str}' ...")
+                target_file = await self.uploader.get_file_by_path(arg_str)
             
             if not target_file:
-                 yield event.plain_result(f"❌ 未找到文件 '{path_str}'。")
+                 yield event.plain_result(f"❌ 未找到文件 '{arg_str}'。")
             else:
                 # Check if it's a folder
-                if target_file.get("file_type") == 1:
-                    yield event.plain_result(f"❌ '{path_str}' 是一个文件夹，无法直接下载。")
+                is_folder = (target_file.get("file_type") == 1) or target_file.get("is_folder", False)
+                if is_folder:
+                    yield event.plain_result(f"❌ 目标是一个文件夹，无法直接下载。")
                 else:
                     file_id = target_file.get("fileid")
                     filename = target_file.get("file_name")
@@ -435,11 +427,9 @@ class WeDriveUploaderPlugin(Star):
                     
                     if local_path:
                         try:
-                            # 判断是私聊还是群聊
                             is_group = (hasattr(event.message_obj, 'group_id') and event.message_obj.group_id) or (event.message_obj.type == MessageType.GROUP_MESSAGE)
                             
                             if is_group:
-                                # 群聊：走 Webhook 推送
                                 webhook_key = self.config.get("webhook_key", "25994ab1-6b0b-4059-a47b-eebf5bd20e19")
                                 media_id = await self.uploader.upload_to_webhook(local_path, webhook_key)
                                 
@@ -448,27 +438,23 @@ class WeDriveUploaderPlugin(Star):
                                     if success:
                                         yield event.plain_result(f"✅ 文件 '{filename}' 已通过 Webhook 推送到群。")
                                     else:
-                                        yield event.plain_result(f"❌ Webhook 推送失败，请检查日志。")
+                                        yield event.plain_result(f"❌ Webhook 推送失败。")
                                 else:
-                                    yield event.plain_result(f"❌ 上传到 Webhook 失败，请检查日志。")
+                                    yield event.plain_result(f"❌ 上传到 Webhook 失败。")
                             else:
-                                # 私聊：走应用消息推送
-                                # 获取发送者 UserID
                                 to_user = event.message_obj.sender.user_id
                                 if not to_user:
-                                     yield event.plain_result(f"❌ 无法获取您的 UserID，无法推送。")
+                                     yield event.plain_result(f"❌ 无法获取您的 UserID。")
                                 else:
                                     media_id = await self.uploader.upload_media_via_token(local_path)
-                                    
                                     if media_id:
                                         success = await self.uploader.send_file_via_token(to_user, media_id)
                                         if success:
                                             yield event.plain_result(f"✅ 文件 '{filename}' 已推送到您的私聊。")
                                         else:
-                                            yield event.plain_result(f"❌ 应用消息推送失败，请检查 AgentID 是否正确 (默认1000002)。")
+                                            yield event.plain_result(f"❌ 应用消息推送失败。")
                                     else:
-                                        yield event.plain_result(f"❌ 素材上传失败，请检查日志。")
-
+                                        yield event.plain_result(f"❌ 素材上传失败。")
                         except Exception as e:
                             logger.error(f"[WeDriveUploader] 推送流程异常: {e}")
                             yield event.plain_result(f"❌ 推送异常: {e}")
@@ -492,46 +478,41 @@ class WeDriveUploaderPlugin(Star):
             result_id = await self.uploader.create_folder_by_path(path_str)
             
             if result_id:
-                 yield event.plain_result(f"✅ 文件夹 '{path_str}' (及必要父目录) 创建/确认成功。")
+                 yield event.plain_result(f"✅ 文件夹 '{path_str}' 创建成功。")
             else:
-                 yield event.plain_result(f"❌ 创建失败，请检查日志。")
+                 yield event.plain_result(f"❌ 创建失败。")
             
             event.stop_event()
             return
 
         # 6. 处理 "移" 指令
         if message_str.startswith("移"):
-            # Args parsing might need adjustment since we removed space enforcement
-            # But "移a b" -> args="a b", split() -> ["a", "b"] still works if space exists between args
-            # "移" followed immediately by path? "移file destination"?
-            # Users still need space between args.
-            
             args_str = message_str[1:].strip()
             args = args_str.split()
             
             if len(args) != 2:
-                yield event.plain_result("⚠️ 指令格式错误。请使用：移 <源路径> <目标文件夹路径>，例如：移test.txt 资料/备份")
+                yield event.plain_result("⚠️ 指令格式错误。请使用：移 <序号/源路径> <目标路径>")
                 event.stop_event()
                 return
 
-
-            src_path = args[0]
+            src_arg = args[0]
             dst_path = args[1]
             
-            logger.info(f"[WeDriveUploader] 尝试移动: {src_path} -> {dst_path}")
-            yield event.plain_result(f"🚚 正在解析路径并移动...")
-
-            # Resolve source
-            src_file = await self.uploader.get_file_by_path(src_path)
+            src_file = None
+            cached_file = self._get_cached_file(session_id, src_arg)
+            if cached_file:
+                logger.info(f"[WeDriveUploader] 使用缓存文件(序号{src_arg})作为源")
+                src_file = cached_file
+            else:
+                logger.info(f"[WeDriveUploader] 查找源路径: {src_arg}")
+                src_file = await self.uploader.get_file_by_path(src_arg)
+            
             if not src_file:
-                yield event.plain_result(f"❌ 未找到源文件/文件夹 '{src_path}'。")
+                yield event.plain_result(f"❌ 未找到源文件 '{src_arg}'。")
                 event.stop_event()
                 return
                 
             # Resolve destination
-            # Support moving to root if dst is "/" or "."? 
-            # Assume user provides a folder name. If they want root, maybe they type "root" or "/"?
-            # For now, assume explicit path.
             if dst_path == "/" or dst_path == ".":
                 dst_folder_id = self.uploader.space_id
                 dst_name = "根目录"
@@ -543,15 +524,14 @@ class WeDriveUploaderPlugin(Star):
                     return
                 dst_folder_id = dst_folder.get('fileid')
                 dst_name = dst_folder.get('file_name')
-                
-                # Check if dst is actually a folder (file_type=1 is folder usually, but let API handle or check?)
-                # It's safer to try.
             
+            yield event.plain_result(f"🚚 正在移动...")
             success = await self.uploader.move_files([src_file['fileid']], dst_folder_id)
             if success:
-                yield event.plain_result(f"✅ 已将 '{src_path}' 移动到 '{dst_name}'。")
+                src_name = src_file.get('file_name', src_file.get('name'))
+                yield event.plain_result(f"✅ 已将 '{src_name}' 移动到 '{dst_name}'。")
             else:
-                yield event.plain_result(f"❌ 移动失败，请检查目标是否为有效文件夹或权限问题。")
+                yield event.plain_result(f"❌ 移动失败。")
 
             event.stop_event()
             return
