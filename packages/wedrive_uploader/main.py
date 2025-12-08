@@ -142,8 +142,8 @@ class WeDriveUploaderPlugin(Star):
         
         # 1. Check for direct match at start
         for cmd in cmd_map:
-            # Strict rule: CMD must be followed by space, OR be the exact string (for "搜" with no args, or "帮助")
-            if message_str == cmd or message_str.startswith(cmd + " "):
+            # Modified: Allow prefix match without space (e.g. "搜test")
+            if message_str.startswith(cmd):
                 target_cmd = cmd
                 clean_msg = message_str
                 break
@@ -151,17 +151,13 @@ class WeDriveUploaderPlugin(Star):
         # 2. If not found, check if it's inside (e.g. after At)
         if not target_cmd:
              for cmd in cmd_map:
-                # Search for " CMD " or "] CMD " or "]CMD "
-                # Simplest heuristic: Find the cmd, check character before it.
+                # Search for " CMD" or "]CMD" (looser check)
                 idx = message_str.find(cmd)
                 if idx > 0:
                     # Check char before
                     prev_char = message_str[idx-1]
-                    # Check char after (must be space or end of string)
-                    is_end = (idx + len(cmd) == len(message_str))
-                    next_char_is_space = (not is_end) and message_str[idx+len(cmd)] == ' '
-                    
-                    if (prev_char.isspace() or prev_char == ']') and (is_end or next_char_is_space):
+                    # We accept if previous char is space or ']'
+                    if prev_char.isspace() or prev_char == ']':
                         target_cmd = cmd
                         clean_msg = message_str[idx:]
                         break
@@ -173,34 +169,33 @@ class WeDriveUploaderPlugin(Star):
             message_str = clean_msg
 
         # 0. 处理 "帮助" 指令
-        if message_str == "帮助":
+        if message_str.startswith("帮助"):
             help_text = (
-                "微盘助手指令说明 (单字指令需加空格)：\n\n"
-                "搜 <参数>\n"
+                "微盘助手指令说明：\n\n"
+                "搜<参数>\n"
                 "  - 不加参数：列出根目录所有文件\n"
-                "  - 加文件名：递归搜索全盘 (如: 搜 es)\n"
-                "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜 资料)\n\n"
-                "下 <路径>\n"
-                "  - 下载根目录文件 (如: 下 test.txt)\n"
-                "  - 下载指定路径文件 (如: 下 资料/报告.pdf)\n\n"               
-                "建 <路径>\n"
-                "  - 递归创建文件夹 (如: 建 资料/2025/备份)\n\n"
-                "移 <源路径> <目标路径>\n"
-                "  - 移动文件或文件夹 (如: 移 test.txt 资料/备份)\n"
-                "  - 移动到根目录使用 / (如: 移 资料/旧文件.txt /)\n\n"
-                "删 <路径>\n\n"
+                "  - 加文件名：递归搜索全盘 (如: 搜es)\n"
+                "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜资料)\n\n"
+                "下<路径>\n"
+                "  - 下载根目录文件 (如: 下test.txt)\n"
+                "  - 下载指定路径文件 (如: 下资料/报告.pdf)\n\n"               
+                "建<路径>\n"
+                "  - 递归创建文件夹 (如: 建资料/2025/备份)\n\n"
+                "移<源路径> <目标路径>\n"
+                "  - 移动文件或文件夹 (如: 移test.txt 资料/备份)\n"
+                "  - 移动到根目录使用 / (如: 移资料/旧文件.txt /)\n\n"
+                "删<路径>\n\n"
                 "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
-                "  - 第一次删除示例：删 测试/test.txt\n\n"
-                "  - 第二次删除示例：删 回收站/test.txt\n\n"
+                "  - 第一次删除示例：删测试/test.txt\n\n"
+                "  - 第二次删除示例：删回收站/test.txt\n\n"
             )
             yield event.plain_result(help_text)
             event.stop_event()
             return
 
         # 1. 处理 "搜" 指令
-        if message_str == "搜" or message_str.startswith("搜 "):
-            # Handle case "搜" (no space, just cmd) -> args is empty
-            # Handle case "搜 xxx" -> args is "xxx"
+        if message_str.startswith("搜"):
+            # Handle case "搜" (no args) or "搜xxx"
             args = message_str[1:].strip()
             
             # case 1: No args -> List root files
@@ -342,7 +337,7 @@ class WeDriveUploaderPlugin(Star):
             return
 
         # 3. 处理 "删" 指令
-        if message_str.startswith("删 "):
+        if message_str.startswith("删"):
             # --- Start: Recycle bin and Admin check ---
             if self.uploader is None:
                 yield event.plain_result(f"❌ 微盘服务未初始化，请检查配置。")
@@ -367,7 +362,7 @@ class WeDriveUploaderPlugin(Star):
 
             path_str = message_str[1:].strip()
             if not path_str:
-                yield event.plain_result("⚠️ 请输入要删除的文件或文件夹路径，例如：删 test.txt")
+                yield event.plain_result("⚠️ 请输入要删除的文件或文件夹路径，例如：删test.txt")
                 event.stop_event()
                 return
 
@@ -413,10 +408,10 @@ class WeDriveUploaderPlugin(Star):
             return
 
         # 4. 处理 "下" 指令
-        if message_str.startswith("下 "):
+        if message_str.startswith("下"):
             path_str = message_str[1:].strip()
             if not path_str:
-                yield event.plain_result("⚠️ 请输入要下载的文件路径，例如：下 资料/test.txt")
+                yield event.plain_result("⚠️ 请输入要下载的文件路径，例如：下资料/test.txt")
                 event.stop_event()
                 return
 
@@ -484,10 +479,10 @@ class WeDriveUploaderPlugin(Star):
             return
 
         # 5. 处理 "建" 指令
-        if message_str.startswith("建 "):
+        if message_str.startswith("建"):
             path_str = message_str[1:].strip()
             if not path_str:
-                yield event.plain_result("⚠️ 请输入要创建的文件夹路径，例如：建 资料/2025/备份")
+                yield event.plain_result("⚠️ 请输入要创建的文件夹路径，例如：建资料/2025/备份")
                 event.stop_event()
                 return
 
@@ -506,11 +501,19 @@ class WeDriveUploaderPlugin(Star):
 
         # 6. 处理 "移" 指令
         if message_str.startswith("移"):
-            args = message_str[1:].strip().split()
+            # Args parsing might need adjustment since we removed space enforcement
+            # But "移a b" -> args="a b", split() -> ["a", "b"] still works if space exists between args
+            # "移" followed immediately by path? "移file destination"?
+            # Users still need space between args.
+            
+            args_str = message_str[1:].strip()
+            args = args_str.split()
+            
             if len(args) != 2:
-                yield event.plain_result("⚠️ 指令格式错误。请使用：移 <源路径> <目标文件夹路径>，例如：移 test.txt 资料/备份")
+                yield event.plain_result("⚠️ 指令格式错误。请使用：移 <源路径> <目标文件夹路径>，例如：移test.txt 资料/备份")
                 event.stop_event()
                 return
+
 
             src_path = args[0]
             dst_path = args[1]
