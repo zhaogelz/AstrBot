@@ -18,6 +18,7 @@ data /config / wedrive_uploader.json 填写配置文件依次为：// 企业ID//
 
 nohup uv run main.py > output.log 2>&1 &
 
+systemctl restart astrbot
 # 查找进程
 ps -ef | grep "uv run main.py"
 
