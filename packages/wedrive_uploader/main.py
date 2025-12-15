@@ -120,12 +120,79 @@ class WeDriveUploaderPlugin(Star):
             return cache[index-1]
         return None
 
+    async def _push_file_to_event(self, event: AstrMessageEvent, target_file: dict):
+        """Helper to download and push file to the event source"""
+        logger.info(f"[WeDriveUploader] _push_file_to_event called for file: {target_file.get('file_name', target_file.get('name'))}, ID: {target_file.get('fileid')}, FileType: {target_file.get('file_type')}")
+        # Check if it's a folder
+        is_folder = (target_file.get("file_type") == 1) or target_file.get("is_folder", False)
+        if is_folder:
+            yield event.plain_result(f"❌ 目标是一个文件夹，无法直接下载。")
+            logger.info(f"[WeDriveUploader] _push_file_to_event: Target is a folder, cannot download directly.")
+            return
+
+        file_id = target_file.get("fileid")
+        filename = target_file.get("file_name")
+        yield event.plain_result(f"📥 正在下载 '{filename}' 并推送...")
+        logger.debug(f"[WeDriveUploader] _push_file_to_event: Downloading file {filename} with ID {file_id}")
+        
+        local_path = await self.uploader.download_file_to_local(file_id, filename)
+        
+        if local_path:
+            logger.debug(f"[WeDriveUploader] _push_file_to_event: File downloaded to {local_path}")
+            try:
+                is_group = (hasattr(event.message_obj, 'group_id') and event.message_obj.group_id) or (event.message_obj.type == MessageType.GROUP_MESSAGE)
+                
+                if is_group:
+                    logger.debug(f"[WeDriveUploader] _push_file_to_event: Sending to group via webhook.")
+                    webhook_key = self.config.get("webhook_key", "25994ab1-6b0b-4059-a47b-eebf5bd20e19")
+                    media_id = await self.uploader.upload_to_webhook(local_path, webhook_key)
+                    
+                    if media_id:
+                        logger.debug(f"[WeDriveUploader] _push_file_to_event: Uploaded to webhook, media_id: {media_id}")
+                        success = await self.uploader.push_file_via_webhook(media_id, webhook_key)
+                        if success:
+                            yield event.plain_result(f"✅ 文件 '{filename}' 已通过 Webhook 推送到群。")
+                            logger.debug(f"[WeDriveUploader] _push_file_to_event: Webhook push successful.")
+                        else:
+                            yield event.plain_result(f"❌ Webhook 推送失败。")
+                            logger.error(f"[WeDriveUploader] _push_file_to_event: Webhook push failed.")
+                    else:
+                        yield event.plain_result(f"❌ 上传到 Webhook 失败。")
+                        logger.error(f"[WeDriveUploader] _push_file_to_event: Upload to webhook failed.")
+                else:
+                    logger.debug(f"[WeDriveUploader] _push_file_to_event: Sending to private chat.")
+                    to_user = event.message_obj.sender.user_id
+                    if not to_user:
+                            yield event.plain_result(f"❌ 无法获取您的 UserID。")
+                            logger.error(f"[WeDriveUploader] _push_file_to_event: Cannot get user ID for private chat.")
+                    else:
+                        media_id = await self.uploader.upload_media_via_token(local_path)
+                        if media_id:
+                            logger.debug(f"[WeDriveUploader] _push_file_to_event: Uploaded media, media_id: {media_id}")
+                            success = await self.uploader.send_file_via_token(to_user, media_id)
+                            if success:
+                                yield event.plain_result(f"✅ 文件 '{filename}' 已推送到您的私聊。")
+                                logger.debug(f"[WeDriveUploader] _push_file_to_event: Private chat push successful.")
+                            else:
+                                yield event.plain_result(f"❌ 应用消息推送失败。")
+                                logger.error(f"[WeDriveUploader] _push_file_to_event: Private chat push failed.")
+                        else:
+                            yield event.plain_result(f"❌ 素材上传失败。")
+                            logger.error(f"[WeDriveUploader] _push_file_to_event: Media upload failed.")
+            except Exception as e:
+                logger.error(f"[WeDriveUploader] 推送流程异常: {e}")
+                yield event.plain_result(f"❌ 推送异常: {e}")
+        else:
+            yield event.plain_result(f"❌ 下载失败，请检查日志。")
+            logger.error(f"[WeDriveUploader] _push_file_to_event: File download failed, local_path is None.")
+
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，筛选文件进行上传"""
         if not self.uploader:
             return
 
+        logger.debug(f"[WeDriveUploader] on_message received: '{event.message_str.strip()}', rules: {self.config.get('auto_download_rules')}")
         message_str = event.message_str.strip()
         cmd_map = {
             "搜": "搜",
@@ -160,7 +227,27 @@ class WeDriveUploaderPlugin(Star):
                         break
 
         if not target_cmd:
-            pass
+            # Check for auto-download keywords
+            rules = self.config.get("auto_download_rules", [])
+            for rule in rules:
+                keywords = rule.get("keywords", [])
+                file_path = rule.get("file_path")
+                
+                if keywords and file_path and len(keywords) >= 2:
+                    # Check if ALL keywords are in message
+                    if all(k in message_str for k in keywords):
+                        logger.info(f"[WeDriveUploader] 触发自动下载规则: {keywords} -> {file_path}")
+                        target_file = await self.uploader.get_file_by_path(file_path)
+                        if target_file:
+                             logger.info(f"[WeDriveUploader] Calling _push_file_to_event for file: {file_path}")
+                             async for res in self._push_file_to_event(event, target_file):
+                                 yield res
+                        else:
+                             logger.warning(f"[WeDriveUploader] 自动下载规则触发，但未找到文件: {file_path}")
+                             yield event.plain_result(f"❌ 自动下载失败：微盘中未找到文件 '{file_path}'。")
+                        
+                        event.stop_event()
+                        return
         else:
             message_str = clean_msg
 
