@@ -48,3 +48,4 @@ astrbot.lock
 chroma
 venv/*
 pytest.ini
+*.pdf
