@@ -229,6 +229,8 @@ class WeDriveUploaderPlugin(Star):
         if not target_cmd:
             # Check for auto-download keywords
             rules = self.config.get("auto_download_rules", [])
+            matched_rules = []
+
             for rule in rules:
                 keywords = rule.get("keywords", [])
                 file_path = rule.get("file_path")
@@ -236,18 +238,26 @@ class WeDriveUploaderPlugin(Star):
                 if keywords and file_path and len(keywords) >= 2:
                     # Check if ALL keywords are in message
                     if all(k in message_str for k in keywords):
-                        logger.info(f"[WeDriveUploader] 触发自动下载规则: {keywords} -> {file_path}")
-                        target_file = await self.uploader.get_file_by_path(file_path)
-                        if target_file:
-                             logger.info(f"[WeDriveUploader] Calling _push_file_to_event for file: {file_path}")
-                             async for res in self._push_file_to_event(event, target_file):
-                                 yield res
-                        else:
-                             logger.warning(f"[WeDriveUploader] 自动下载规则触发，但未找到文件: {file_path}")
-                             yield event.plain_result(f"❌ 自动下载失败：微盘中未找到文件 '{file_path}'。")
-                        
-                        event.stop_event()
-                        return
+                        matched_rules.append(rule)
+            
+            if matched_rules:
+                # Select the best match based on total keyword length
+                best_rule = max(matched_rules, key=lambda r: sum(len(k) for k in r.get("keywords", [])))
+                keywords = best_rule.get("keywords", [])
+                file_path = best_rule.get("file_path")
+
+                logger.info(f"[WeDriveUploader] 触发自动下载规则 (Best Match): {keywords} -> {file_path}")
+                target_file = await self.uploader.get_file_by_path(file_path)
+                if target_file:
+                        logger.info(f"[WeDriveUploader] Calling _push_file_to_event for file: {file_path}")
+                        async for res in self._push_file_to_event(event, target_file):
+                            yield res
+                else:
+                        logger.warning(f"[WeDriveUploader] 自动下载规则触发，但未找到文件: {file_path}")
+                        yield event.plain_result(f"❌ 自动下载失败：微盘中未找到文件 '{file_path}'。")
+                
+                event.stop_event()
+                return
         else:
             message_str = clean_msg
 
