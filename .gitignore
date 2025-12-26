@@ -49,3 +49,4 @@ chroma
 venv/*
 pytest.ini
 *.pdf
+auto_upload.log

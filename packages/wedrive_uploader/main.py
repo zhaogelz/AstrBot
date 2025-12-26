@@ -192,7 +192,7 @@ class WeDriveUploaderPlugin(Star):
         if not self.uploader:
             return
 
-        logger.debug(f"[WeDriveUploader] on_message received: '{event.message_str.strip()}', rules: {self.config.get('auto_download_rules')}")
+        logger.debug(f"[WeDriveUploader] on_message received: {repr(event.message_str)}, rules: {self.config.get('auto_download_rules')}")
         message_str = event.message_str.strip()
         cmd_map = {
             "搜": "搜",
@@ -234,10 +234,19 @@ class WeDriveUploaderPlugin(Star):
             for rule in rules:
                 keywords = rule.get("keywords", [])
                 file_path = rule.get("file_path")
+                case_sensitive = rule.get("case_sensitive", False)
                 
                 if keywords and file_path and len(keywords) >= 2:
                     # Check if ALL keywords are in message
-                    if all(k in message_str for k in keywords):
+                    matched = False
+                    if case_sensitive:
+                        if all(k in message_str for k in keywords):
+                            matched = True
+                    else:
+                        if all(k.lower() in message_str.lower() for k in keywords):
+                            matched = True
+
+                    if matched:
                         matched_rules.append(rule)
             
             if matched_rules:
