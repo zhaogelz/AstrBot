@@ -409,32 +409,61 @@ class WecomPlatformAdapter(Platform):
                             logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
                     
                     if hasattr(self.client, "kf_message"):
-                        # 方案 B: 回复图文链接卡片
-                        original_link = msg.get("link", {})
-                        title = original_link.get("title", "未命名链接")
-                        url = original_link.get("url", "")
+                        # 方案 B (修正版): 下载原图并上传以获取 thumb_media_id
+                        async def reply_with_link():
+                            try:
+                                original_link = msg.get("link", {})
+                                title = original_link.get("title", "未命名链接")
+                                url = original_link.get("url", "")
+                                pic_url = original_link.get("pic_url", "")
+                                
+                                thumb_media_id = ""
+                                if pic_url:
+                                    # 1. 下载图片
+                                    async with aiohttp.ClientSession() as session:
+                                        async with session.get(pic_url) as resp:
+                                            if resp.status == 200:
+                                                image_data = await resp.read()
+                                                # 2. 上传到微信获取 media_id
+                                                # 需要在 executor 中运行同步上传
+                                                def upload_media():
+                                                    # wechatpy 上传需要文件对象，这里用 BytesIO 模拟
+                                                    from io import BytesIO
+                                                    f = BytesIO(image_data)
+                                                    f.name = "thumb.jpg" # 伪造文件名
+                                                    return self.client.media.upload("image", f)
+                                                
+                                                res = await asyncio.get_event_loop().run_in_executor(None, upload_media)
+                                                thumb_media_id = res['media_id']
+                                
+                                # 3. 发送消息
+                                reply_msg = {
+                                    "msgtype": "link",
+                                    "link": {
+                                        "title": "收到啦！",
+                                        "desc": f"引用: {title}",
+                                        "url": url,
+                                        "thumb_media_id": thumb_media_id
+                                    }
+                                }
+                                logger.info(f"尝试回复图文链接 (带封面): {reply_msg}")
+                                await asyncio.get_event_loop().run_in_executor(
+                                    None,
+                                    self.client.kf_message.send,
+                                    msg.get("external_userid"),
+                                    msg.get("open_kfid"),
+                                    "",
+                                    reply_msg
+                                )
+                                logger.info("已回复收到消息 (Link卡片模式+封面)。")
+                            except Exception as e:
+                                logger.error(f"回复图文链接失败: {e}")
+
+                        asyncio.create_task(reply_with_link()) # 异步执行避免阻塞
                         
-                        # 构造 link 类型消息
-                        reply_msg = {
-                            "msgtype": "link",
-                            "link": {
-                                "title": "收到啦！",
-                                "desc": f"引用: {title}",
-                                "url": url,
-                                # "thumb_media_id": "" # 暂不上传图片，避免延迟
-                            }
-                        }
-                        
-                        logger.info(f"尝试回复图文链接: {reply_msg}")
-                        await asyncio.get_event_loop().run_in_executor(
-                            None,
-                            self.client.kf_message.send,
-                            msg.get("external_userid"),
-                            msg.get("open_kfid"),
-                            "", # msgid 留空
-                            reply_msg
-                        )
-                        logger.info("已回复收到消息 (Link卡片模式)。")
+                except Exception as e:
+                    logger.error(f"处理链接消息失败: {e}")
+            return
                 except Exception as e:
                     logger.error(f"处理链接消息失败: {e}")
             return
