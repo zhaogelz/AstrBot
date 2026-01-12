@@ -409,13 +409,15 @@ class WecomPlatformAdapter(Platform):
                             logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
                     
                     if hasattr(self.client, "kf_message"):
+                        msgid = msg.get("msgid", "")
+                        logger.info(f"尝试回复消息，msgid: {msgid}")
                         await asyncio.get_event_loop().run_in_executor(
                             None,
                             self.client.kf_message.send_text,
                             msg.get("external_userid"),
                             msg.get("open_kfid"),
                             "收到啦！",
-                            msg.get("msgid", "")
+                            msgid
                         )
                         logger.info("已回复收到消息。")
                 except Exception as e:
