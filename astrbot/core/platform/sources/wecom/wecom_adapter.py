@@ -409,23 +409,32 @@ class WecomPlatformAdapter(Platform):
                             logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
                     
                     if hasattr(self.client, "kf_message"):
-                        # 微信客服 API 的 msgid 是用于去重的，不支持原生引用样式。
-                        # 因此手动拼接标题以模拟引用。
-                        link_title = msg.get("link", {}).get("title", "")
-                        reply_content = "收到啦！"
-                        if link_title:
-                            reply_content += f"\n----------------\n引用: {link_title}"
+                        # 方案 B: 回复图文链接卡片
+                        original_link = msg.get("link", {})
+                        title = original_link.get("title", "未命名链接")
+                        url = original_link.get("url", "")
                         
-                        logger.info(f"尝试回复消息 (模拟引用): {reply_content}")
+                        # 构造 link 类型消息
+                        reply_msg = {
+                            "msgtype": "link",
+                            "link": {
+                                "title": "收到啦！",
+                                "desc": f"引用: {title}",
+                                "url": url,
+                                # "thumb_media_id": "" # 暂不上传图片，避免延迟
+                            }
+                        }
+                        
+                        logger.info(f"尝试回复图文链接: {reply_msg}")
                         await asyncio.get_event_loop().run_in_executor(
                             None,
-                            self.client.kf_message.send_text,
+                            self.client.kf_message.send,
                             msg.get("external_userid"),
                             msg.get("open_kfid"),
-                            reply_content,
-                            "" # msgid 留空，避免被误用为去重 ID
+                            "", # msgid 留空
+                            reply_msg
                         )
-                        logger.info("已回复收到消息。")
+                        logger.info("已回复收到消息 (Link卡片模式)。")
                 except Exception as e:
                     logger.error(f"处理链接消息失败: {e}")
             return
