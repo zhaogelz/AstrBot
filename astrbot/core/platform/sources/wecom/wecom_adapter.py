@@ -464,9 +464,6 @@ class WecomPlatformAdapter(Platform):
                 except Exception as e:
                     logger.error(f"处理链接消息失败: {e}")
             return
-                except Exception as e:
-                    logger.error(f"处理链接消息失败: {e}")
-            return
         await self.handle_msg(abm)
 
     async def handle_msg(self, message: AstrBotMessage):
