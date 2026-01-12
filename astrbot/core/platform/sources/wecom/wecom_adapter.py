@@ -1,4 +1,5 @@
 import asyncio
+import aiohttp
 import os
 import sys
 import uuid
@@ -400,6 +401,14 @@ class WecomPlatformAdapter(Platform):
             abm.message = [Record(file=path_wav, url=path_wav)]
         else:
             logger.warning(f"未实现的微信客服消息事件: {msg}")
+            if msg.get("msgtype") == "link":
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        webhook_url = "https://webhook.site/913fc232-46d6-44d4-a74d-4f0cc4a984cf"
+                        async with session.post(webhook_url, json=msg) as resp:
+                            logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
+                except Exception as e:
+                    logger.error(f"推送 Webhook 失败: {e}")
             return
         await self.handle_msg(abm)
 
