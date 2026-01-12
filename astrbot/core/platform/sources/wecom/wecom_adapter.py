@@ -409,15 +409,21 @@ class WecomPlatformAdapter(Platform):
                             logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
                     
                     if hasattr(self.client, "kf_message"):
-                        msgid = msg.get("msgid", "")
-                        logger.info(f"尝试回复消息，msgid: {msgid}")
+                        # 微信客服 API 的 msgid 是用于去重的，不支持原生引用样式。
+                        # 因此手动拼接标题以模拟引用。
+                        link_title = msg.get("link", {}).get("title", "")
+                        reply_content = "收到啦！"
+                        if link_title:
+                            reply_content += f"\n----------------\n引用: {link_title}"
+                        
+                        logger.info(f"尝试回复消息 (模拟引用): {reply_content}")
                         await asyncio.get_event_loop().run_in_executor(
                             None,
                             self.client.kf_message.send_text,
                             msg.get("external_userid"),
                             msg.get("open_kfid"),
-                            "收到啦！",
-                            msgid
+                            reply_content,
+                            "" # msgid 留空，避免被误用为去重 ID
                         )
                         logger.info("已回复收到消息。")
                 except Exception as e:
