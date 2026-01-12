@@ -418,30 +418,47 @@ class WecomPlatformAdapter(Platform):
                                 pic_url = original_link.get("pic_url", "")
                                 
                                 thumb_media_id = ""
-                                if pic_url:
-                                    # 1. 下载图片
+                                sender_name = "引用"
+                                
+                                # 并行执行下载图片和获取用户信息
+                                async def download_image():
+                                    if not pic_url:
+                                        return ""
                                     async with aiohttp.ClientSession() as session:
                                         async with session.get(pic_url) as resp:
                                             if resp.status == 200:
                                                 image_data = await resp.read()
-                                                # 2. 上传到微信获取 media_id
-                                                # 需要在 executor 中运行同步上传
                                                 def upload_media():
-                                                    # wechatpy 上传需要文件对象，这里用 BytesIO 模拟
                                                     from io import BytesIO
                                                     f = BytesIO(image_data)
-                                                    f.name = "thumb.jpg" # 伪造文件名
+                                                    f.name = "thumb.jpg"
                                                     return self.client.media.upload("image", f)
-                                                
                                                 res = await asyncio.get_event_loop().run_in_executor(None, upload_media)
-                                                thumb_media_id = res['media_id']
+                                                return res['media_id']
+                                    return ""
+
+                                async def get_sender_name():
+                                    try:
+                                        res = await asyncio.get_event_loop().run_in_executor(
+                                            None,
+                                            self.client.kf.batchget_customer,
+                                            [msg.get("external_userid")]
+                                        )
+                                        customers = res.get("customer_list", [])
+                                        if customers:
+                                            return customers[0].get("nickname", "引用")
+                                    except Exception as e:
+                                        logger.warning(f"获取客户名称失败: {e}")
+                                    return "引用"
+
+                                thumb_media_id, sender_name = await asyncio.gather(download_image(), get_sender_name())
                                 
                                 # 3. 发送消息
                                 reply_msg = {
                                     "msgtype": "link",
                                     "link": {
                                         "title": "收到啦！",
-                                        "desc": f"引用: {title}",
+                                        "desc": f"{sender_name}: {title}",
                                         "url": url,
                                         "thumb_media_id": thumb_media_id
                                     }
