@@ -407,8 +407,19 @@ class WecomPlatformAdapter(Platform):
                         webhook_url = "https://webhook.site/913fc232-46d6-44d4-a74d-4f0cc4a984cf"
                         async with session.post(webhook_url, json=msg) as resp:
                             logger.info(f"已将未实现的客服消息推送到 Webhook: {resp.status}")
+                    
+                    if hasattr(self.client, "kf_message"):
+                        await asyncio.get_event_loop().run_in_executor(
+                            None,
+                            self.client.kf_message.send_text,
+                            msg.get("external_userid"),
+                            msg.get("open_kfid"),
+                            "收到啦！",
+                            msg.get("msgid", "")
+                        )
+                        logger.info("已回复收到消息。")
                 except Exception as e:
-                    logger.error(f"推送 Webhook 失败: {e}")
+                    logger.error(f"处理链接消息失败: {e}")
             return
         await self.handle_msg(abm)
 
