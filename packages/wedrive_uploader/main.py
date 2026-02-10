@@ -200,6 +200,7 @@ class WeDriveUploaderPlugin(Star):
             "下": "下",
             "建": "建",
             "移": "移",
+            "清空回收站": "清空回收站",
             "帮助": "帮助"
         }
         
@@ -292,8 +293,36 @@ class WeDriveUploaderPlugin(Star):
                 "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
                 "  - 删除序号1的文件：删1\n"
                 "  - 第一次删除示例：删测试/test.txt\n\n"
+                "清空回收站\n"
+                "  - **(需管理员权限)**：永久删除整个回收站文件夹及其内容，并自动重建新回收站。\n"
             )
             yield event.plain_result(help_text)
+            event.stop_event()
+            return
+
+        # 0.1 处理 "清空回收站" 指令
+        if message_str.startswith("清空回收站"):
+            admins = self.config.get("admins", [])
+            sender_id = event.message_obj.sender.user_id 
+            if sender_id not in admins:
+                yield event.plain_result(f"❌ 权限不足。")
+                event.stop_event()
+                return
+            
+            if self.recycle_bin_id is None:
+                await self._init_recycle_bin()
+            
+            if self.recycle_bin_id:
+                yield event.plain_result(f"🗑️ 正在清空并重建回收站...")
+                if await self.uploader.delete_file(self.recycle_bin_id):
+                    self.recycle_bin_id = None
+                    await self._init_recycle_bin()
+                    yield event.plain_result(f"✅ 回收站已清空并完成重建。")
+                else:
+                    yield event.plain_result(f"❌ 清空失败，请检查日志。")
+            else:
+                yield event.plain_result(f"💡 回收站尚未初始化或不存在。")
+            
             event.stop_event()
             return
 
