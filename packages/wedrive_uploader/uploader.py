@@ -329,7 +329,8 @@ class WeDriveUploader:
                             'path': item_path,
                             'size': item.get('file_size', 0),
                             'is_folder': (f_type == 1),
-                            'fileid': item.get('fileid')
+                            'fileid': item.get('fileid'),
+                            'fatherid': curr_id
                         })
                     
                     # If folder, add to queue to traverse deeper

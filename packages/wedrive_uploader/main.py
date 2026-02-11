@@ -200,7 +200,6 @@ class WeDriveUploaderPlugin(Star):
             "下": "下",
             "建": "建",
             "移": "移",
-            "清空回收站": "清空回收站",
             "帮助": "帮助"
         }
         
@@ -280,7 +279,7 @@ class WeDriveUploaderPlugin(Star):
                 "搜<参数>\n"
                 "  - 不加参数：列出根目录所有文件\n"
                 "  - 加文件名：递归搜索全盘 (如: 搜es)\n"
-                "  - 加路径：列出文件夹内容或搜索子目录 (如: 搜资料)\n\n"
+                "  - 加路径：列出文件夹内容 (如: 搜资料)\n\n"
                 "下<序号/路径>\n"
                 "  - 下载指定序号文件 (如: 下1)\n"
                 "  - 下载指定路径文件 (如: 下资料/报告.pdf)\n\n"               
@@ -289,40 +288,13 @@ class WeDriveUploaderPlugin(Star):
                 "移<序号/源路径> <目标路径>\n"
                 "  - 移动文件或文件夹 (如: 移1 资料/备份)\n"
                 "  - 移动到根目录使用 / (如: 移资料/旧文件.txt /)\n\n"
-                "删<序号/路径>\n\n"
-                "  **(需管理员权限，第一次删除：文件/文件夹将被移入「回收站」，第二次删除：删除「回收站」内文件，将永久删除)**：\n"
-                "  - 删除序号1的文件：删1\n"
-                "  - 第一次删除示例：删测试/test.txt\n\n"
-                "清空回收站\n"
-                "  - **(需管理员权限)**：永久删除整个回收站文件夹及其内容，并自动重建新回收站。\n"
+                "删<序号/路径/回收站>\n"
+                "  **(需管理员权限)**：\n"
+                "  - 移入回收站：删1 或 删测试.txt\n"
+                "  - 永久删除：搜回收站 后 删序号，或 删回收站/测试.txt\n"
+                "  - 清空回收站：删回收站\n"
             )
             yield event.plain_result(help_text)
-            event.stop_event()
-            return
-
-        # 0.1 处理 "清空回收站" 指令
-        if message_str.startswith("清空回收站"):
-            admins = self.config.get("admins", [])
-            sender_id = event.message_obj.sender.user_id 
-            if sender_id not in admins:
-                yield event.plain_result(f"❌ 权限不足。")
-                event.stop_event()
-                return
-            
-            if self.recycle_bin_id is None:
-                await self._init_recycle_bin()
-            
-            if self.recycle_bin_id:
-                yield event.plain_result(f"🗑️ 正在清空并重建回收站...")
-                if await self.uploader.delete_file(self.recycle_bin_id):
-                    self.recycle_bin_id = None
-                    await self._init_recycle_bin()
-                    yield event.plain_result(f"✅ 回收站已清空并完成重建。")
-                else:
-                    yield event.plain_result(f"❌ 清空失败，请检查日志。")
-            else:
-                yield event.plain_result(f"💡 回收站尚未初始化或不存在。")
-            
             event.stop_event()
             return
 
@@ -344,6 +316,9 @@ class WeDriveUploaderPlugin(Star):
                 else:
                     file_list = files.get('item', []) if isinstance(files, dict) else files
                     if not isinstance(file_list, list): file_list = []
+                    # Inject root space_id as fatherid
+                    for item in file_list:
+                        item['fatherid'] = self.uploader.space_id
 
             # case 2: With args
             else:
@@ -363,6 +338,8 @@ class WeDriveUploaderPlugin(Star):
                         files = await self.uploader.list_files(fatherid=folder_id)
                         if files:
                             file_list = files.get('item', [])
+                            for item in file_list:
+                                item['fatherid'] = folder_id
                     else:
                         yield event.plain_result(f"❌ '{name}' 是一个文件，无法进入搜索。\n💡 提示：可使用 '下{args}' 下载，或 '删{args}' 删除。")
                         event.stop_event()
@@ -387,6 +364,8 @@ class WeDriveUploaderPlugin(Star):
                         
                         if files:
                             file_list = files.get('item', [])
+                            for item in file_list:
+                                item['fatherid'] = folder_id
                     
                     # If not a folder match, assume keyword search
                     elif not matched_folder:
@@ -471,6 +450,17 @@ class WeDriveUploaderPlugin(Star):
                 event.stop_event()
                 return
 
+            if arg_str == "回收站":
+                yield event.plain_result(f"🗑️ 正在清空并重建回收站...")
+                if await self.uploader.delete_file(self.recycle_bin_id):
+                    self.recycle_bin_id = None
+                    await self._init_recycle_bin()
+                    yield event.plain_result(f"✅ 回收站已清空并完成重建。")
+                else:
+                    yield event.plain_result(f"❌ 清空失败，请检查日志。")
+                event.stop_event()
+                return
+
             target_file_obj = None
             cached_file = self._get_cached_file(session_id, arg_str)
             
@@ -486,35 +476,12 @@ class WeDriveUploaderPlugin(Star):
                      event.stop_event()
                      return
                 
-                # Need to find fatherid to check recycle bin status?
-                # recursive_search items don't strictly have 'fatherid'.
-                # list_files items might not either unless we check structure.
-                # However, delete logic checks parent to see if it's in recycle bin.
-                # If we don't have fatherid, we might need to fetch info? 
-                # Or just try to delete. 'delete_file' works by fileid. 
-                # The recycle bin logic in original code depended on 'fatherid'.
-                
-                # Optimization: If cached obj is from recursive search, we might know path but not fatherid directly.
-                # Let's try to fetch full info if fatherid is missing, or rely on move logic.
-                
+                # If fatherid is missing, try path-based heuristic (e.g. for recursive search results that might lack it)
                 if 'fatherid' not in target_file_obj:
-                     # Try to resolve by path if available to get full metadata?
-                     # Actually, for delete logic:
-                     # 1. Check if current parent is recycle bin -> Permanent Delete
-                     # 2. Else -> Move to recycle bin
-                     
-                     # Since we don't know parent ID easily from search result (unless we query),
-                     # we can check if the file's path starts with "回收站/"?
                      path_val = target_file_obj.get('path', target_file_obj.get('file_name'))
-                     # If from list_files(root), path is just name.
-                     # If from recursive_search, path is full path.
-                     
                      if path_val.startswith("回收站/") or path_val == "回收站":
-                         # It is in recycle bin
-                         # Mock fatherid
                          target_file_obj['fatherid'] = self.recycle_bin_id
                      else:
-                         # Assume not in recycle bin
                          target_file_obj['fatherid'] = "unknown"
 
             else:
